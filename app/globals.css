@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code",
+    Menlo, monospace;
+}
+
+html,
+body {
+  font-family: var(--font-mono);
+  font-feature-settings: "ss01", "cv05", "cv09";
+  letter-spacing: -0.01em;
+}
+
+/* Scrollbars: subtle, dark */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+
+/* Selection */
+::selection {
+  background: #fbbf24;
+  color: #0a0a0a;
+}
+
+/* Focus ring — sharp, no rounded blur */
+*:focus-visible {
+  outline: 1px solid #fbbf24;
+  outline-offset: 2px;
+}
+
+/* Cards: subtle grain background for texture */
+.card-surface {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.02) 0%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-color: #141414;
+}
