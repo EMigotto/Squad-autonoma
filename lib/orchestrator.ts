@@ -1,9 +1,15 @@
 /**
  * Orquestrador: máquina de estados do Kanban.
- * Roda no SERVER (Route Handlers, Server Actions). Usa service role do Supabase.
+ * Versão simplificada compatível com Managed Agents public beta.
+ *
+ * Removido nesta versão:
+ * - memory_store (research preview)
+ * - define_outcome (research preview)
+ *
+ * Cada session tem só o repo GitHub montado. Contexto entre etapas
+ * passa pelo próprio repo (PRD/ADR/PRs em markdown) e pelos initial_messages.
  */
 import { anthropic } from "@/lib/claude";
-import { OUTCOMES } from "@/lib/agents";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { StageCode } from "@/lib/supabase/types";
 
@@ -23,17 +29,10 @@ const NEXT_STAGE: Record<StageCode, StageCode> = {
   done: "done",
 };
 
-const OUTCOME_KEY: Record<string, keyof typeof OUTCOMES | null> = {
-  "pm:discovery": "pm",
-  "tech_lead:planning": "tech_lead_planning",
-  "tech_lead:development": null,
-  "qa:qa": "qa",
-};
-
 // ============================================================
-// Ensure feature resources (memory store + environment)
+// Ensure environment for the feature (created on first stage)
 // ============================================================
-async function ensureFeatureResources(featureId: string) {
+async function ensureFeatureEnvironment(featureId: string) {
   const sb = createServiceClient();
   const { data: feature, error } = await sb
     .from("features")
@@ -42,40 +41,20 @@ async function ensureFeatureResources(featureId: string) {
     .single();
   if (error || !feature) throw new Error(`feature ${featureId} not found`);
 
-  const updates: Record<string, string> = {};
-
-  if (!feature.claude_memory_store_id) {
-    // @ts-expect-error beta API
-    const store = await anthropic.beta.memoryStores.create({
-      name: `feature-${feature.slug}`,
-    });
-    updates.claude_memory_store_id = store.id;
-  }
-
   if (!feature.claude_environment_id) {
-    // @ts-expect-error beta API
+    // @ts-expect-error beta API types ainda evoluindo
     const env = await anthropic.beta.environments.create({
-      container: {
-        type: "ubuntu",
-        packages: ["nodejs", "python3", "git", "build-essential"],
-      },
-      network: {
-        allowed_domains: [
-          "github.com",
-          "api.github.com",
-          "raw.githubusercontent.com",
-          "registry.npmjs.org",
-          "pypi.org",
-          "files.pythonhosted.org",
-        ],
+      name: `env-${feature.slug}`,
+      config: {
+        type: "cloud",
+        networking: { type: "unrestricted" },
       },
     });
-    updates.claude_environment_id = env.id;
-  }
-
-  if (Object.keys(updates).length > 0) {
-    await sb.from("features").update(updates).eq("id", featureId);
-    Object.assign(feature, updates);
+    await sb
+      .from("features")
+      .update({ claude_environment_id: env.id })
+      .eq("id", featureId);
+    feature.claude_environment_id = env.id;
   }
 
   return feature;
@@ -106,46 +85,31 @@ export async function startStage(
     .single();
   if (agentErr || !agentRow) {
     throw new Error(
-      `no current agent for role=${role}. Run \`npm run setup-agents\`.`
+      `no current agent for role=${role}. Run /admin/setup first.`
     );
   }
 
-  const feature = await ensureFeatureResources(card.feature_id);
+  const feature = await ensureFeatureEnvironment(card.feature_id);
 
   const userMsg = initialMessage ?? defaultKickoff(card, feature);
-
-  const resources = [
-    {
-      type: "github_repository" as const,
-      url: `https://github.com/${feature.github_repo}`,
-      mount_path: "/workspace/repo",
-      authorization_token: process.env.GITHUB_TOKEN!,
-    },
-    {
-      type: "memory_store" as const,
-      memory_store_id: feature.claude_memory_store_id,
-    },
-  ];
 
   // @ts-expect-error beta API
   const session = await anthropic.beta.sessions.create({
     agent: agentRow.claude_agent_id,
     environment_id: feature.claude_environment_id,
-    resources,
-    initial_message: userMsg,
+    title: `${feature.slug} · ${card.stage}`,
   });
 
-  // Attach Outcome rubric if this (role, stage) has one
-  const outcomeKey = OUTCOME_KEY[`${role}:${card.stage}`];
-  if (outcomeKey) {
-    const rubric = OUTCOMES[outcomeKey];
-    // @ts-expect-error beta API
-    await anthropic.beta.sessions.defineOutcome({
-      session_id: session.id,
-      criteria: rubric.criteria,
-      max_iterations: rubric.max_iterations,
-    });
-  }
+  // Manda a mensagem inicial via events.send
+  // @ts-expect-error beta API
+  await anthropic.beta.sessions.events.send(session.id, {
+    events: [
+      {
+        type: "user.message",
+        content: [{ type: "text", text: userMsg }],
+      },
+    ],
+  });
 
   await sb
     .from("cards")
@@ -184,7 +148,6 @@ export async function advanceCard(
     throw new Error(`card is ${card.status}; cannot advance`);
   }
 
-  // Close open gate
   await sb
     .from("human_gates")
     .update({
@@ -197,11 +160,7 @@ export async function advanceCard(
     .is("decision", null);
 
   if (decision === "rejected") {
-    await sb
-      .from("cards")
-      .update({ status: "rejected" })
-      .eq("id", cardId);
-
+    await sb.from("cards").update({ status: "rejected" }).eq("id", cardId);
     await startStage(
       cardId,
       `Your previous attempt was rejected by the human reviewer.\n\n` +
@@ -211,7 +170,6 @@ export async function advanceCard(
     return;
   }
 
-  // Approved
   await sb.from("cards").update({ status: "approved" }).eq("id", cardId);
 
   const nextStage = NEXT_STAGE[card.stage as StageCode];
@@ -272,7 +230,6 @@ export async function createFeature(input: {
   if (cErr || !card) throw cErr ?? new Error("failed to create card");
 
   await startStage(card.id);
-
   return { feature_id: feature.id, card_id: card.id };
 }
 
@@ -280,7 +237,7 @@ export async function createFeature(input: {
 // Default kickoff messages by stage
 // ============================================================
 function defaultKickoff(
-  card: { stage: string; feature_id: string },
+  card: { stage: string },
   feature: {
     slug: string;
     title: string;
@@ -309,8 +266,8 @@ function defaultKickoff(
   if (stage === "development") {
     return (
       `All chunks for feature '${feature.slug}' are planned.\n` +
-      `Spawn Dev subagents in parallel respecting the dependency graph.\n` +
-      `Code Reviewer Agent reviews each PR before notifying me.`
+      `List the chunks ready to start (no blocking dependencies) and the suggested order. ` +
+      `I will dispatch Dev Agents one by one based on your recommendation.`
     );
   }
   if (stage === "qa") {
