@@ -1,8 +1,18 @@
 /**
- * Definições e setup idempotente dos agents do squad.
- * Rode com: npx tsx scripts/setup-agents.ts
+ * Definições dos agents do squad — versão compatível com o beta público.
+ *
+ * Removido nesta versão (estão em research preview, não no beta público):
+ * - multiagent coordinator (Tech Lead spawning Devs em paralelo)
+ * - memory_stores
+ * - outcomes / define_outcome
+ *
+ * Adicionaremos depois quando sua conta tiver acesso à research preview.
  */
 import crypto from "crypto";
+
+// Modelos suportados pelo Managed Agents public beta
+const MODEL_FAST = "claude-haiku-4-5";   // PM (texto)
+const MODEL_SMART = "claude-opus-4-6";   // Tech Lead, Devs, Reviewer, QA
 
 const GITHUB_MCP = {
   type: "url" as const,
@@ -42,7 +52,7 @@ Rules:
 
 export const buildPmAgent = () => ({
   name: "PM Agent",
-  model: { id: "claude-haiku-4-5" },
+  model: { id: MODEL_FAST },
   system: PM_SYSTEM_PROMPT,
   tools: [
     { type: "agent_toolset_20260401" },
@@ -52,7 +62,7 @@ export const buildPmAgent = () => ({
 });
 
 // ============================================================
-// Tech Lead Agent (coordinator)
+// Tech Lead Agent — SEM multiagent coordinator nesta versão
 // ============================================================
 export const TECH_LEAD_SYSTEM_PROMPT = `You are the Tech Lead Agent. Two modes:
 
@@ -68,24 +78,18 @@ Output:
 
 MODE B — DEVELOPMENT
 Input: chunks labeled \`status:planned\`.
-You are now a coordinator. Spawn Dev subagents in PARALLEL for chunks
-whose dependencies are merged. Block dependents until parents merge.
-When a Dev reports \`status:needs-replanning\`, rewrite/split the chunk and re-spawn.
-End your turn when all chunks reach \`status:approved\`.`;
+List the chunks ready to start (dependencies merged) and recommend the order.
+The orchestrator will dispatch Dev Agents serially. End your turn with that list.`;
 
 export const buildTechLeadAgent = () => ({
   name: "Tech Lead Agent",
-  model: { id: "claude-opus-4-7" },
+  model: { id: MODEL_SMART },
   system: TECH_LEAD_SYSTEM_PROMPT,
   tools: [
     { type: "agent_toolset_20260401" },
     { type: "mcp_toolset", mcp_server_name: "github" },
   ],
   mcp_servers: [GITHUB_MCP],
-  multiagent: {
-    type: "coordinator",
-    agents: ["dev_backend", "dev_frontend", "dev_infra", "code_reviewer"],
-  },
 });
 
 // ============================================================
@@ -97,7 +101,7 @@ Input: ONE GitHub sub-issue labeled \`skill:${skill}\`.
 
 Workflow:
 1. Read the parent feature's PRD and ADR before touching code.
-2. Create a worktree branch \`feat/<slug>/<chunk-number>-<short-name>\` via \`git worktree add\`.
+2. Create a branch \`feat/<slug>/<chunk-number>-<short-name>\`.
 3. Implement STRICTLY within the chunk's scope.
 4. Run lint, typecheck, existing tests before committing.
 5. Open a DRAFT PR. \`Closes #<n>\`. Label \`status:in-review\`.
@@ -113,7 +117,7 @@ If the chunk is wrong (impossible, conflicts with ADR, missing context):
 
 export const buildDevAgent = (skill: string, conventions: string) => ({
   name: `Dev Agent (${skill})`,
-  model: { id: "claude-opus-4-7" },
+  model: { id: MODEL_SMART },
   system: devPrompt(skill, conventions),
   tools: [
     { type: "agent_toolset_20260401" },
@@ -133,7 +137,7 @@ Review checklist (apply ALL):
 2. Scope — any changes outside the chunk that opened the PR?
 3. Security — hardcoded secrets, injection, missing input validation?
 4. Conventions — follows CONVENTIONS.md?
-5. Testability — is the code easy to test? (Tests come later in QA stage.)
+5. Testability — is the code easy to test?
 6. Obvious perf — N+1, alloc in hot loop, etc.
 
 Output:
@@ -145,7 +149,7 @@ You cannot revise rejected work — that is the next Dev session's job.`;
 
 export const buildCodeReviewerAgent = () => ({
   name: "Code Reviewer Agent",
-  model: { id: "claude-opus-4-7" },
+  model: { id: MODEL_SMART },
   system: CODE_REVIEWER_PROMPT,
   tools: [
     { type: "agent_toolset_20260401" },
@@ -176,7 +180,7 @@ End your turn with a summary and the CI run URL.`;
 
 export const buildQaAgent = () => ({
   name: "QA Agent",
-  model: { id: "claude-opus-4-7" },
+  model: { id: MODEL_SMART },
   system: QA_SYSTEM_PROMPT,
   tools: [
     { type: "agent_toolset_20260401" },
@@ -184,38 +188,6 @@ export const buildQaAgent = () => ({
   ],
   mcp_servers: [GITHUB_MCP],
 });
-
-// ============================================================
-// Outcomes — automated rubrics before human review
-// ============================================================
-export const OUTCOMES = {
-  pm: {
-    criteria: [
-      "PRD exists at docs/features/<slug>/prd.md with all required sections",
-      "Acceptance criteria has at least 1 positive AND 1 negative scenario per requirement",
-      "Prototype HTML is self-contained (no external scripts)",
-      "Draft PR is open from feat/<slug>/spec against main",
-    ],
-    max_iterations: 3,
-  },
-  tech_lead_planning: {
-    criteria: [
-      "ADR exists with rationale for each major technical choice",
-      "Every PRD acceptance criterion mapped to ≥1 chunk",
-      "No chunk has circular dependencies",
-      "All chunks have valid skill labels (backend/frontend/infra/data)",
-    ],
-    max_iterations: 3,
-  },
-  qa: {
-    criteria: [
-      "Test files exist exercising every chunk's new code",
-      "CI run completed successfully (green)",
-      "Line coverage report shows ≥80% on new code paths",
-    ],
-    max_iterations: 5,
-  },
-} as const;
 
 // ============================================================
 // Role registry
