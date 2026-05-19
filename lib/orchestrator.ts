@@ -1,15 +1,8 @@
 /**
  * Orquestrador: máquina de estados do Kanban.
  * Versão simplificada compatível com Managed Agents public beta.
- *
- * Removido nesta versão:
- * - memory_store (research preview)
- * - define_outcome (research preview)
- *
- * Cada session tem só o repo GitHub montado. Contexto entre etapas
- * passa pelo próprio repo (PRD/ADR/PRs em markdown) e pelos initial_messages.
  */
-import { anthropic } from "@/lib/claude";
+import { beta } from "@/lib/claude";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { StageCode } from "@/lib/supabase/types";
 
@@ -29,9 +22,6 @@ const NEXT_STAGE: Record<StageCode, StageCode> = {
   done: "done",
 };
 
-// ============================================================
-// Ensure environment for the feature (created on first stage)
-// ============================================================
 async function ensureFeatureEnvironment(featureId: string) {
   const sb = createServiceClient();
   const { data: feature, error } = await sb
@@ -42,8 +32,7 @@ async function ensureFeatureEnvironment(featureId: string) {
   if (error || !feature) throw new Error(`feature ${featureId} not found`);
 
   if (!feature.claude_environment_id) {
-    // @ts-expect-error beta API types ainda evoluindo
-    const env = await anthropic.beta.environments.create({
+    const env = await beta.environments.create({
       name: `env-${feature.slug}`,
       config: {
         type: "cloud",
@@ -60,9 +49,6 @@ async function ensureFeatureEnvironment(featureId: string) {
   return feature;
 }
 
-// ============================================================
-// start_stage: create a Claude session for this card
-// ============================================================
 export async function startStage(
   cardId: string,
   initialMessage?: string
@@ -93,16 +79,13 @@ export async function startStage(
 
   const userMsg = initialMessage ?? defaultKickoff(card, feature);
 
-  // @ts-expect-error beta API
-  const session = await anthropic.beta.sessions.create({
+  const session = await beta.sessions.create({
     agent: agentRow.claude_agent_id,
     environment_id: feature.claude_environment_id,
     title: `${feature.slug} · ${card.stage}`,
   });
 
-  // Manda a mensagem inicial via events.send
-  // @ts-expect-error beta API
-  await anthropic.beta.sessions.events.send(session.id, {
+  await beta.sessions.events.send(session.id, {
     events: [
       {
         type: "user.message",
@@ -123,9 +106,6 @@ export async function startStage(
   return session.id;
 }
 
-// ============================================================
-// advance_card: apply human decision
-// ============================================================
 export async function advanceCard(
   cardId: string,
   decision: "approved" | "rejected",
@@ -198,9 +178,6 @@ export async function advanceCard(
   }
 }
 
-// ============================================================
-// create_feature: kick off the whole pipeline
-// ============================================================
 export async function createFeature(input: {
   slug: string;
   title: string;
@@ -233,9 +210,6 @@ export async function createFeature(input: {
   return { feature_id: feature.id, card_id: card.id };
 }
 
-// ============================================================
-// Default kickoff messages by stage
-// ============================================================
 function defaultKickoff(
   card: { stage: string },
   feature: {
