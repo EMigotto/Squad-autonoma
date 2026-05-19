@@ -1,6 +1,6 @@
 /**
  * Orquestrador: máquina de estados do Kanban.
- * Versão simplificada compatível com Managed Agents public beta.
+ * Passa GITHUB_TOKEN dentro da initial_message do agente para git auth direto.
  */
 import { beta } from "@/lib/claude";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -22,6 +22,16 @@ const NEXT_STAGE: Record<StageCode, StageCode> = {
   done: "done",
 };
 
+// Normaliza slug: tira acentos, lowercase, troca não-alfanum por hífen
+function normalizeSlug(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 async function ensureFeatureEnvironment(featureId: string) {
   const sb = createServiceClient();
   const { data: feature, error } = await sb
@@ -33,7 +43,7 @@ async function ensureFeatureEnvironment(featureId: string) {
 
   if (!feature.claude_environment_id) {
     const env = await beta.environments.create({
-      name: `env-${feature.slug}`,
+      name: `env-${normalizeSlug(feature.slug)}`,
       config: {
         type: "cloud",
         networking: { type: "unrestricted" },
@@ -188,9 +198,12 @@ export async function createFeature(input: {
 }): Promise<{ feature_id: string; card_id: string }> {
   const sb = createServiceClient();
 
+  // Normaliza o slug aqui, no ponto de entrada
+  const normalizedSlug = normalizeSlug(input.slug);
+
   const { data: feature, error: fErr } = await sb
     .from("features")
-    .insert(input)
+    .insert({ ...input, slug: normalizedSlug })
     .select("id")
     .single();
   if (fErr || !feature) throw fErr ?? new Error("failed to create feature");
@@ -220,13 +233,26 @@ function defaultKickoff(
     github_parent_issue: number | null;
   }
 ): string {
+  const token = process.env.GITHUB_TOKEN ?? "(missing)";
+  const [owner, repo] = feature.github_repo.split("/");
+
+  const credBlock =
+    `\n--- GitHub credentials ---\n` +
+    `Repo: ${feature.github_repo}\n` +
+    `Owner: ${owner}\n` +
+    `Repo name: ${repo}\n` +
+    `Token: ${token}\n` +
+    `Clone URL: https://x-access-token:${token}@github.com/${feature.github_repo}.git\n` +
+    `API auth header: Authorization: token ${token}\n` +
+    `---\n`;
+
   const stage = card.stage;
   if (stage === "discovery") {
     return (
       `Build the spec for feature '${feature.title}' (slug: ${feature.slug}).\n\n` +
-      `Initial description:\n${feature.description}\n\n` +
-      `Repo: ${feature.github_repo}\n` +
-      `When done, open the draft PR and reply with the URL.`
+      `Initial description:\n${feature.description}\n` +
+      credBlock +
+      `\nWhen done, open the draft PR via the GitHub API and reply with the URL.`
     );
   }
   if (stage === "planning") {
@@ -234,21 +260,24 @@ function defaultKickoff(
       `The PM PR for feature '${feature.slug}' has been merged.\n` +
       `Read docs/features/${feature.slug}/prd.md and acceptance-criteria.md.\n` +
       `Produce the ADR and decompose into chunks (one sub-issue per chunk).\n` +
-      `Parent issue: #${feature.github_parent_issue}.`
+      `Parent issue: #${feature.github_parent_issue}.` +
+      credBlock
     );
   }
   if (stage === "development") {
     return (
       `All chunks for feature '${feature.slug}' are planned.\n` +
       `List the chunks ready to start (no blocking dependencies) and the suggested order. ` +
-      `I will dispatch Dev Agents one by one based on your recommendation.`
+      `I will dispatch Dev Agents one by one based on your recommendation.` +
+      credBlock
     );
   }
   if (stage === "qa") {
     return (
       `All Dev PRs for feature '${feature.slug}' are merged into ` +
       `feat/${feature.slug}/integration.\n` +
-      `Write the test suite, ensure CI is green, and report coverage.`
+      `Write the test suite, ensure CI is green, and report coverage.` +
+      credBlock
     );
   }
   throw new Error(`no kickoff template for stage ${stage}`);
