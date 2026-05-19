@@ -30,6 +30,7 @@ export default function CreateFeatureDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>("");
   const [stack, setStack] = useState<string>("");
+  const [success, setSuccess] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -53,7 +54,13 @@ export default function CreateFeatureDialog({
         setSubmitting(false);
         return;
       }
-      onClose();
+      // Sucesso: mostra confirmação e fecha após 1.5s
+      setSuccess(true);
+      setTimeout(() => {
+        onClose();
+        // Force refresh do board pra garantir que o card aparece
+        window.location.reload();
+      }, 1500);
     } catch (err) {
       setError(stringifyError(err));
       setSubmitting(false);
@@ -79,7 +86,8 @@ export default function CreateFeatureDialog({
           onChange={(e) => setForm({ ...form, [key]: e.target.value })}
           placeholder={placeholder}
           rows={multiline ? 4 : undefined}
-          className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+          disabled={success}
+          className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none disabled:opacity-50"
         />
       </div>
     );
@@ -103,20 +111,34 @@ export default function CreateFeatureDialog({
           <button
             type="button"
             onClick={onClose}
-            className="text-ink-400 hover:text-ink-100 text-xl leading-none"
+            disabled={success}
+            className="text-ink-400 hover:text-ink-100 text-xl leading-none disabled:opacity-50"
           >
             ×
           </button>
         </div>
 
-        {field("slug", "slug", "ex: dark-mode-toggle")}
-        {field("title", "título", "ex: Dark mode no app")}
-        {field("description", "descrição", "O que precisa ser feito?", true)}
-        {field("github_repo", "github repo", "myorg/myrepo")}
-        {field(
-          "github_parent_issue",
-          "parent issue # (opcional)",
-          "ex: 42"
+        {success && (
+          <div className="border border-qa bg-qa/5 p-3 text-sm text-qa">
+            <div className="font-semibold mb-1">feature criada ✓</div>
+            <div className="text-xs opacity-80">
+              PM Agent disparado. Você vai ver o card aparecer em Discovery em segundos. Atualizando…
+            </div>
+          </div>
+        )}
+
+        {!success && (
+          <>
+            {field("slug", "slug", "ex: dark-mode-toggle")}
+            {field("title", "título", "ex: Dark mode no app")}
+            {field("description", "descrição", "O que precisa ser feito?", true)}
+            {field("github_repo", "github repo", "owner/repo")}
+            {field(
+              "github_parent_issue",
+              "parent issue # (opcional)",
+              "ex: 42"
+            )}
+          </>
         )}
 
         {error && (
@@ -132,22 +154,24 @@ export default function CreateFeatureDialog({
           </div>
         )}
 
-        <div className="flex justify-end gap-2 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 text-sm text-ink-300 hover:text-ink-100"
-          >
-            cancelar
-          </button>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300 disabled:opacity-50"
-          >
-            {submitting ? "criando..." : "criar e disparar PM Agent →"}
-          </button>
-        </div>
+        {!success && (
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 text-sm text-ink-300 hover:text-ink-100"
+            >
+              cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300 disabled:opacity-50"
+            >
+              {submitting ? "criando..." : "criar e disparar PM Agent →"}
+            </button>
+          </div>
+        )}
       </form>
     </div>
   );
