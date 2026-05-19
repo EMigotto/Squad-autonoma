@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 
 function stringifyError(err: unknown): string {
   if (typeof err === "string") return err;
@@ -15,6 +16,16 @@ function stringifyError(err: unknown): string {
   return String(err);
 }
 
+interface PendingFile {
+  file: File;
+  status: "pending" | "uploading" | "done" | "error";
+  storagePath?: string;
+  error?: string;
+}
+
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB por arquivo
+const MAX_FILES = 5;
+
 export default function CreateFeatureDialog({
   onClose,
 }: {
@@ -27,10 +38,98 @@ export default function CreateFeatureDialog({
     github_repo: "",
     github_parent_issue: "",
   });
+  const [files, setFiles] = useState<PendingFile[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>("");
   const [stack, setStack] = useState<string>("");
   const [success, setSuccess] = useState(false);
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
+    const valid: PendingFile[] = [];
+    const errors: string[] = [];
+
+    for (const f of selected) {
+      if (files.length + valid.length >= MAX_FILES) {
+        errors.push(`máximo ${MAX_FILES} arquivos`);
+        break;
+      }
+      if (f.size > MAX_FILE_SIZE) {
+        errors.push(`${f.name} é maior que 2MB`);
+        continue;
+      }
+      const isHtml =
+        f.type === "text/html" ||
+        f.name.toLowerCase().endsWith(".html") ||
+        f.name.toLowerCase().endsWith(".htm");
+      if (!isHtml) {
+        errors.push(`${f.name} não é HTML`);
+        continue;
+      }
+      valid.push({ file: f, status: "pending" });
+    }
+
+    if (errors.length > 0) {
+      setError(errors.join("; "));
+    } else {
+      setError("");
+    }
+    setFiles([...files, ...valid]);
+    e.target.value = ""; // permite re-selecionar mesmo arquivo
+  }
+
+  function removeFile(idx: number) {
+    setFiles(files.filter((_, i) => i !== idx));
+  }
+
+  async function uploadAll(): Promise<string[]> {
+    const sb = createClient();
+    const {
+      data: { user },
+    } = await sb.auth.getUser();
+    if (!user) throw new Error("sessão expirada");
+
+    const uploaded: string[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const pending = files[i];
+      if (pending.status === "done" && pending.storagePath) {
+        uploaded.push(pending.storagePath);
+        continue;
+      }
+
+      // Atualiza status pra "uploading"
+      setFiles((prev) =>
+        prev.map((f, j) => (j === i ? { ...f, status: "uploading" } : f))
+      );
+
+      const path = `${user.id}/${Date.now()}-${pending.file.name}`;
+      const { error: upErr } = await sb.storage
+        .from("feature-attachments")
+        .upload(path, pending.file, {
+          contentType: pending.file.type || "text/html",
+          upsert: false,
+        });
+
+      if (upErr) {
+        setFiles((prev) =>
+          prev.map((f, j) =>
+            j === i ? { ...f, status: "error", error: upErr.message } : f
+          )
+        );
+        throw new Error(`falha no upload de ${pending.file.name}: ${upErr.message}`);
+      }
+
+      uploaded.push(path);
+      setFiles((prev) =>
+        prev.map((f, j) =>
+          j === i ? { ...f, status: "done", storagePath: path } : f
+        )
+      );
+    }
+
+    return uploaded;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,6 +137,8 @@ export default function CreateFeatureDialog({
     setError("");
     setStack("");
     try {
+      const attachmentPaths = files.length > 0 ? await uploadAll() : [];
+
       const res = await fetch("/api/features", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -45,6 +146,8 @@ export default function CreateFeatureDialog({
           ...form,
           github_parent_issue:
             parseInt(form.github_parent_issue, 10) || 0,
+          attachment_paths: attachmentPaths,
+          attachment_filenames: files.map((f) => f.file.name),
         }),
       });
       if (!res.ok) {
@@ -54,11 +157,9 @@ export default function CreateFeatureDialog({
         setSubmitting(false);
         return;
       }
-      // Sucesso: mostra confirmação e fecha após 1.5s
       setSuccess(true);
       setTimeout(() => {
         onClose();
-        // Force refresh do board pra garantir que o card aparece
         window.location.reload();
       }, 1500);
     } catch (err) {
@@ -122,7 +223,7 @@ export default function CreateFeatureDialog({
           <div className="border border-qa bg-qa/5 p-3 text-sm text-qa">
             <div className="font-semibold mb-1">feature criada ✓</div>
             <div className="text-xs opacity-80">
-              PM Agent disparado. Você vai ver o card aparecer em Discovery em segundos. Atualizando…
+              PM Agent disparado com os protótipos anexados. Atualizando…
             </div>
           </div>
         )}
@@ -138,6 +239,75 @@ export default function CreateFeatureDialog({
               "parent issue # (opcional)",
               "ex: 42"
             )}
+
+            {/* Upload de HTMLs */}
+            <div>
+              <label className="block text-xs uppercase tracking-widest text-ink-400 mb-1">
+                protótipos HTML (opcional · até {MAX_FILES} arquivos · 2MB cada)
+              </label>
+              <div className="text-[11px] text-ink-400 mb-2 leading-relaxed">
+                Anexe HTMLs gerados no Claude Designer (ou outra ferramenta). Os
+                agentes vão usar como referência visual exata — o PM Agent
+                descreve essas telas no PRD, e os Devs implementam fidelidade visual.
+              </div>
+
+              <label className="block bg-ink-950 border border-dashed border-ink-700 hover:border-discovery transition-colors p-4 cursor-pointer text-center text-sm text-ink-300">
+                <input
+                  type="file"
+                  accept=".html,.htm,text/html"
+                  multiple
+                  onChange={handleFileSelect}
+                  className="hidden"
+                  disabled={files.length >= MAX_FILES}
+                />
+                + adicionar protótipo HTML
+              </label>
+
+              {files.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {files.map((f, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between bg-ink-950 border border-ink-800 px-2 py-1.5 text-xs"
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <span
+                          className={
+                            f.status === "done"
+                              ? "text-qa"
+                              : f.status === "error"
+                                ? "text-discovery"
+                                : f.status === "uploading"
+                                  ? "text-planning"
+                                  : "text-ink-300"
+                          }
+                        >
+                          {f.status === "done"
+                            ? "✓"
+                            : f.status === "error"
+                              ? "✗"
+                              : f.status === "uploading"
+                                ? "…"
+                                : "○"}
+                        </span>
+                        <span className="text-ink-100 truncate">{f.file.name}</span>
+                        <span className="text-ink-400 shrink-0">
+                          {(f.file.size / 1024).toFixed(0)}kb
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeFile(i)}
+                        className="text-ink-400 hover:text-ink-100 ml-2"
+                        disabled={f.status === "uploading"}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </>
         )}
 
@@ -168,7 +338,11 @@ export default function CreateFeatureDialog({
               disabled={submitting}
               className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300 disabled:opacity-50"
             >
-              {submitting ? "criando..." : "criar e disparar PM Agent →"}
+              {submitting
+                ? files.length > 0
+                  ? "fazendo upload..."
+                  : "criando..."
+                : "criar e disparar PM Agent →"}
             </button>
           </div>
         )}
