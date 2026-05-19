@@ -2,6 +2,19 @@
 
 import { useState } from "react";
 
+function stringifyError(err: unknown): string {
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object") {
+    try {
+      return JSON.stringify(err, null, 2);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
+}
+
 export default function CreateFeatureDialog({
   onClose,
 }: {
@@ -15,27 +28,36 @@ export default function CreateFeatureDialog({
     github_parent_issue: "",
   });
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string>("");
+  const [stack, setStack] = useState<string>("");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
     setError("");
-    const res = await fetch("/api/features", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...form,
-        github_parent_issue: parseInt(form.github_parent_issue, 10) || 0,
-      }),
-    });
-    if (!res.ok) {
-      const j = await res.json();
-      setError(j.error ?? "erro");
+    setStack("");
+    try {
+      const res = await fetch("/api/features", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          github_parent_issue:
+            parseInt(form.github_parent_issue, 10) || 0,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(stringifyError(j.error) || `HTTP ${res.status}`);
+        if (j.stack) setStack(j.stack);
+        setSubmitting(false);
+        return;
+      }
+      onClose();
+    } catch (err) {
+      setError(stringifyError(err));
       setSubmitting(false);
-      return;
     }
-    onClose();
   }
 
   function field(
@@ -67,7 +89,7 @@ export default function CreateFeatureDialog({
     <div className="fixed inset-0 bg-ink-950/80 flex items-center justify-center p-4 z-50">
       <form
         onSubmit={handleSubmit}
-        className="bg-ink-900 border border-ink-700 w-full max-w-xl p-6 space-y-4"
+        className="bg-ink-900 border border-ink-700 w-full max-w-xl p-6 space-y-4 max-h-[90vh] overflow-y-auto"
       >
         <div className="flex items-start justify-between">
           <div>
@@ -97,7 +119,18 @@ export default function CreateFeatureDialog({
           "ex: 42"
         )}
 
-        {error && <div className="text-sm text-qa">{error}</div>}
+        {error && (
+          <div className="border border-qa bg-qa/5 p-3 text-xs text-qa font-mono whitespace-pre-wrap">
+            <div className="uppercase tracking-widest mb-1 opacity-70">erro</div>
+            {error}
+            {stack && (
+              <details className="mt-2 opacity-80">
+                <summary className="cursor-pointer">stack trace</summary>
+                <pre className="mt-2 text-[10px] overflow-x-auto">{stack}</pre>
+              </details>
+            )}
+          </div>
+        )}
 
         <div className="flex justify-end gap-2 pt-2">
           <button
