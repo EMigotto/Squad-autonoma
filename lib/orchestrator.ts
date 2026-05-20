@@ -1,18 +1,11 @@
 /**
- * Orquestrador: máquina de estados do Kanban.
- * Inclui: cancel, completeEarly, previewKickoff, chatWithAgent.
+ * Orquestrador: um card por feature percorrendo as raias.
+ * Agents carregados de agent_definitions (DB).
+ * Histórico de execução em card_stage_runs.
  */
 import { beta } from "@/lib/claude";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { StageCode } from "@/lib/supabase/types";
-
-const STAGE_TO_ROLE: Record<StageCode, string> = {
-  discovery: "pm",
-  planning: "tech_lead",
-  development: "tech_lead",
-  qa: "qa",
-  done: "admin",
-};
 
 const NEXT_STAGE: Record<StageCode, StageCode> = {
   discovery: "planning",
@@ -47,6 +40,35 @@ async function getAppSettings() {
       default_base_branch: "main",
     }
   );
+}
+
+/**
+ * Pega o agent que deve rodar para uma stage.
+ * Pega o primeiro enabled por sort_order na agent_definitions, e o claude_agent_id
+ * correspondente em agents.
+ */
+async function getAgentForStage(stage: string) {
+  const sb = createServiceClient();
+  const { data: def } = await sb
+    .from("agent_definitions")
+    .select("*")
+    .eq("stage", stage)
+    .eq("enabled", true)
+    .order("sort_order", { ascending: true })
+    .limit(1)
+    .single();
+  if (!def) throw new Error(`no enabled agent for stage ${stage}`);
+
+  const { data: deployed } = await sb
+    .from("agents")
+    .select("*")
+    .eq("role", def.role)
+    .eq("is_current", true)
+    .single();
+  if (!deployed)
+    throw new Error(`agent ${def.role} defined but not deployed; run /admin/setup`);
+
+  return { def, deployed };
 }
 
 async function ensureFeatureEnvironment(featureId: string) {
@@ -102,7 +124,7 @@ async function fetchAttachmentContents(featureId: string) {
 }
 
 // ============================================================
-// previewKickoff: monta a initial_message SEM disparar nada
+// previewKickoff: monta initial_message sem disparar
 // ============================================================
 export async function previewKickoff(
   cardId: string,
@@ -122,14 +144,7 @@ export async function previewKickoff(
     .single();
   if (!card) throw new Error(`card ${cardId} not found`);
 
-  const role = STAGE_TO_ROLE[targetStage];
-  const { data: agentRow } = await sb
-    .from("agents")
-    .select("*")
-    .eq("role", role)
-    .eq("is_current", true)
-    .single();
-  if (!agentRow) throw new Error(`no agent for role=${role}`);
+  const { def, deployed } = await getAgentForStage(targetStage);
 
   const { data: feature } = await sb
     .from("features")
@@ -141,10 +156,8 @@ export async function previewKickoff(
   const attachments = await fetchAttachmentContents(card.feature_id);
   const settings = await getAppSettings();
 
-  // Para preview, simulamos que o card está no targetStage
-  const fakeCard = { ...card, stage: targetStage };
   const initial_message = defaultKickoff(
-    fakeCard,
+    { ...card, stage: targetStage },
     feature,
     attachments,
     settings
@@ -152,19 +165,19 @@ export async function previewKickoff(
 
   return {
     initial_message,
-    agent_name: agentRow.role,
-    agent_id: agentRow.claude_agent_id,
-    model: role === "pm" ? "claude-haiku-4-5" : "claude-opus-4-6",
+    agent_name: def.name,
+    agent_id: deployed.claude_agent_id,
+    model: def.model,
   };
 }
 
 // ============================================================
-// startStage: cria session e dispara
+// startStage: cria sessão pro stage atual do card
 // ============================================================
 export async function startStage(
   cardId: string,
   initialMessage?: string,
-  targetStage?: StageCode
+  prependContext?: string
 ): Promise<string> {
   const sb = createServiceClient();
 
@@ -175,30 +188,28 @@ export async function startStage(
     .single();
   if (cardErr || !card) throw new Error(`card ${cardId} not found`);
 
-  const stage = (targetStage ?? card.stage) as StageCode;
-  const role = STAGE_TO_ROLE[stage];
-  const { data: agentRow, error: agentErr } = await sb
-    .from("agents")
-    .select("*")
-    .eq("role", role)
-    .eq("is_current", true)
-    .single();
-  if (agentErr || !agentRow) {
-    throw new Error(
-      `no current agent for role=${role}. Run /admin/setup first.`
-    );
-  }
+  const stage = card.stage as StageCode;
+  const { def, deployed } = await getAgentForStage(stage);
 
   const feature = await ensureFeatureEnvironment(card.feature_id);
   const attachments = await fetchAttachmentContents(card.feature_id);
   const settings = await getAppSettings();
 
-  const userMsg =
-    initialMessage ??
-    defaultKickoff({ ...card, stage }, feature, attachments, settings);
+  let userMsg: string;
+  if (initialMessage) {
+    userMsg = initialMessage;
+  } else {
+    const base = defaultKickoff(
+      { ...card, stage },
+      feature,
+      attachments,
+      settings
+    );
+    userMsg = prependContext ? `${prependContext}\n\n${base}` : base;
+  }
 
   const session = await beta.sessions.create({
-    agent: agentRow.claude_agent_id,
+    agent: deployed.claude_agent_id,
     environment_id: feature.claude_environment_id,
     title: `${feature.slug} · ${stage}`,
   });
@@ -212,16 +223,24 @@ export async function startStage(
     ],
   });
 
+  // Atualiza card e registra stage_run
   await sb
     .from("cards")
     .update({
       claude_session_id: session.id,
-      claude_agent_id: agentRow.id,
+      claude_agent_id: deployed.id,
       status: "running",
     })
     .eq("id", cardId);
 
-  // Persist na chat history para timeline
+  await sb.from("card_stage_runs").insert({
+    card_id: cardId,
+    stage,
+    agent_role: def.role,
+    claude_session_id: session.id,
+    status: "running",
+  });
+
   await sb.from("card_chat_messages").insert({
     card_id: cardId,
     session_id: session.id,
@@ -250,23 +269,13 @@ export async function chatWithAgent(
   if (!card.claude_session_id)
     throw new Error("card has no active session yet");
 
-  // Manda a mensagem para a sessão existente — agent volta a rodar
   await beta.sessions.events.send(card.claude_session_id, {
     events: [
-      {
-        type: "user.message",
-        content: [{ type: "text", text: message }],
-      },
+      { type: "user.message", content: [{ type: "text", text: message }] },
     ],
   });
 
-  // Card volta pra running enquanto agent processa
-  await sb
-    .from("cards")
-    .update({ status: "running" })
-    .eq("id", cardId);
-
-  // Persist no histórico
+  await sb.from("cards").update({ status: "running" }).eq("id", cardId);
   await sb.from("card_chat_messages").insert({
     card_id: cardId,
     session_id: card.claude_session_id,
@@ -279,7 +288,7 @@ export async function chatWithAgent(
 }
 
 // ============================================================
-// advanceCard: decisão do humano (approved → próxima stage)
+// advanceCard: MESMO CARD avança de stage (não cria novo)
 // ============================================================
 export async function advanceCard(
   cardId: string,
@@ -304,6 +313,7 @@ export async function advanceCard(
     throw new Error(`card is ${card.status}; cannot advance`);
   }
 
+  // Fecha o gate atual
   await sb
     .from("human_gates")
     .update({
@@ -315,47 +325,69 @@ export async function advanceCard(
     .eq("card_id", cardId)
     .is("decision", null);
 
+  // Marca o stage_run atual como completed/failed
+  await sb
+    .from("card_stage_runs")
+    .update({
+      status: decision === "approved" ? "completed" : "failed",
+      ended_at: new Date().toISOString(),
+    })
+    .eq("card_id", cardId)
+    .eq("stage", card.stage)
+    .eq("status", "running");
+
   if (decision === "rejected") {
-    await sb.from("cards").update({ status: "rejected" }).eq("id", cardId);
-    await startStage(
-      cardId,
-      `Your previous attempt was rejected by the human reviewer.\n\n` +
-        `REASON:\n${reason}\n\n` +
-        `Address this feedback specifically. Do not redo unrelated work.`
-    );
+    // MESMO CARD, MESMO STAGE — só dispara nova sessão
+    await sb
+      .from("cards")
+      .update({
+        status: "queued",
+        claude_session_id: null, // limpa sessão antiga (fica em stage_runs)
+      })
+      .eq("id", cardId);
+
+    const rejectionContext =
+      `--- REJECTION FEEDBACK ---\n` +
+      `Your previous attempt was REJECTED.\n\nREASON:\n${reason}\n\n` +
+      `Address this feedback specifically. Reuse the task context below.\n` +
+      `--- end rejection feedback ---`;
+
+    await startStage(cardId, undefined, rejectionContext);
     return;
   }
 
-  await sb.from("cards").update({ status: "approved" }).eq("id", cardId);
-
+  // APROVADO: avança o MESMO card pra próxima stage
   const nextStage = NEXT_STAGE[card.stage as StageCode];
+
+  // Marca features.current_stage também
   await sb
     .from("features")
     .update({ current_stage: nextStage })
     .eq("id", card.feature_id);
 
   if (nextStage === "done") {
-    await sb.from("cards").update({ status: "done" }).eq("id", cardId);
+    await sb
+      .from("cards")
+      .update({ status: "done", stage: "done", claude_session_id: null })
+      .eq("id", cardId);
     return;
   }
 
-  const { data: newCard } = await sb
+  // Mesmo card, nova stage
+  await sb
     .from("cards")
-    .insert({
-      feature_id: card.feature_id,
+    .update({
       stage: nextStage,
       status: "queued",
+      claude_session_id: null,
     })
-    .select("id")
-    .single();
+    .eq("id", cardId);
 
-  if (newCard) {
-    await startStage(newCard.id, overrideInitialMessage, nextStage);
-  }
+  await startStage(cardId, overrideInitialMessage);
 }
 
 // ============================================================
-// cancelCard: encerra um card (e seu trabalho)
+// cancelCard
 // ============================================================
 export async function cancelCard(
   cardId: string,
@@ -370,12 +402,8 @@ export async function cancelCard(
     .single();
   if (!card) throw new Error("card not found");
 
-  await sb
-    .from("cards")
-    .update({ status: "cancelled" })
-    .eq("id", cardId);
+  await sb.from("cards").update({ status: "cancelled" }).eq("id", cardId);
 
-  // Fecha qualquer gate aberto
   await sb
     .from("human_gates")
     .update({
@@ -387,7 +415,15 @@ export async function cancelCard(
     .eq("card_id", cardId)
     .is("decision", null);
 
-  // Marca a feature como cancelada
+  await sb
+    .from("card_stage_runs")
+    .update({
+      status: "failed",
+      ended_at: new Date().toISOString(),
+    })
+    .eq("card_id", cardId)
+    .eq("status", "running");
+
   await sb
     .from("features")
     .update({
@@ -395,15 +431,8 @@ export async function cancelCard(
       cancelled_reason: reason,
     })
     .eq("id", card.feature.id);
-
-  // Note: deliberadamente NÃO matamos a sessão Claude.
-  // Beta API ainda não expõe session termination consistente. A sessão
-  // ficará idle naturalmente quando o agente terminar — só ignoramos os outputs.
 }
 
-// ============================================================
-// completeCardEarly: marca feature como concluída antes da hora
-// ============================================================
 export async function completeCardEarly(
   cardId: string,
   completedBy?: string
@@ -425,7 +454,7 @@ export async function completeCardEarly(
     .from("human_gates")
     .update({
       decision: "approved",
-      decision_reason: "concluído antecipadamente pelo humano",
+      decision_reason: "concluído antecipadamente",
       decided_by: completedBy,
       decided_at: new Date().toISOString(),
     })
@@ -442,7 +471,7 @@ export async function completeCardEarly(
 }
 
 // ============================================================
-// createFeature: cria feature + primeiro card
+// createFeature
 // ============================================================
 export async function createFeature(input: {
   slug: string;
@@ -481,7 +510,7 @@ export async function kickoffFirstStage(cardId: string): Promise<string> {
 }
 
 // ============================================================
-// defaultKickoff: monta initial_message
+// defaultKickoff
 // ============================================================
 function defaultKickoff(
   card: { stage: string },
@@ -499,7 +528,7 @@ function defaultKickoff(
     default_base_branch: string;
   }
 ): string {
-  const token = process.env.GITHUB_TOKEN ?? "(missing)";
+  const token = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
   const [owner, repo] = feature.github_repo.split("/");
 
   const credBlock =
@@ -507,32 +536,24 @@ function defaultKickoff(
     `Repo: ${feature.github_repo}\n` +
     `Owner: ${owner}\n` +
     `Repo name: ${repo}\n` +
-    `Token: ${token === "(missing)" ? token : token.slice(0, 8) + "..."}\n` +
-    `Clone URL: https://x-access-token:${
-      token === "(missing)" ? token : token.slice(0, 8) + "..."
-    }@github.com/${feature.github_repo}.git\n` +
-    `API auth header: Authorization: token ${
-      token === "(missing)" ? token : token.slice(0, 8) + "..."
-    }\n` +
-    `Default base branch: ${settings.default_base_branch}\n` +
-    `---\n` +
-    `(token is masked in this preview; full token sent to agent at dispatch)\n`;
+    `Token: ${token}\n` +
+    `Clone URL: https://x-access-token:${token}@github.com/${feature.github_repo}.git\n` +
+    `API auth header: Authorization: token ${token}\n` +
+    `Default base branch: ${settings.default_base_branch}\n---\n`;
 
   let workflowBlock = "";
   if (settings.commit_to_existing_branch) {
     workflowBlock =
       `\n--- Workflow mode: COMMIT-DIRECT ---\n` +
-      `Commit directly to '${settings.default_base_branch}' branch.\n` +
-      `Do NOT create a new branch. Do NOT open a PR.\n` +
-      `End your turn with the commit SHA.\n---\n`;
+      `Commit directly to '${settings.default_base_branch}'. No new branch, no PR.\n---\n`;
   } else if (settings.auto_merge_prs) {
     workflowBlock =
       `\n--- Workflow mode: AUTO-MERGE ---\n` +
-      `Open PR, wait for CI, merge yourself with squash strategy.\n---\n`;
+      `Open PR, wait for CI, merge with squash.\n---\n`;
   } else {
     workflowBlock =
       `\n--- Workflow mode: PR-REVIEW (default) ---\n` +
-      `Open a DRAFT PR. Human reviews and merges.\n---\n`;
+      `Open DRAFT PR. Human merges.\n---\n`;
   }
 
   let attachmentBlock = "";
@@ -541,15 +562,15 @@ function defaultKickoff(
       `\n--- Approved prototypes (${attachments.length} file${
         attachments.length > 1 ? "s" : ""
       }) ---\n` +
-      `These are the SOURCE OF TRUTH for UI.\n` +
+      `Source of truth for UI. Save each to docs/features/<slug>/prototypes/.\n\n` +
       attachments
         .map(
           (a, i) =>
             `### Prototype ${i + 1}: ${a.filename}${
               a.truncated ? " (TRUNCATED)" : ""
-            }\n[${a.content.length} bytes of HTML — embedded in actual dispatch]`
+            }\n\n\`\`\`html\n${a.content}\n\`\`\``
         )
-        .join("\n") +
+        .join("\n\n") +
       `\n---\n`;
   }
 
@@ -565,10 +586,9 @@ function defaultKickoff(
   }
   if (stage === "planning") {
     return (
-      `The PM PR for feature '${feature.slug}' has been merged.\n` +
+      `The PM PR for '${feature.slug}' has been merged.\n` +
       `Read docs/features/${feature.slug}/prd.md, acceptance-criteria.md, prototypes.\n` +
-      `Produce the ADR and decompose into chunks.\n` +
-      `Parent issue: #${feature.github_parent_issue}.` +
+      `Produce ADR and decompose into chunks. Parent issue: #${feature.github_parent_issue}.` +
       credBlock +
       workflowBlock +
       attachmentBlock
@@ -576,8 +596,7 @@ function defaultKickoff(
   }
   if (stage === "development") {
     return (
-      `Chunks for feature '${feature.slug}' are planned. ` +
-      `Recommend Dev Agent order.` +
+      `Chunks for '${feature.slug}' planned. Recommend Dev Agent order.` +
       credBlock +
       workflowBlock +
       attachmentBlock
@@ -585,7 +604,7 @@ function defaultKickoff(
   }
   if (stage === "qa") {
     return (
-      `Dev PRs for '${feature.slug}' are merged. Write tests, run CI.` +
+      `Dev PRs for '${feature.slug}' merged. Write tests, run CI.` +
       credBlock +
       workflowBlock +
       attachmentBlock

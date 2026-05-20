@@ -31,7 +31,6 @@ interface Props {
 }
 
 const STAGE_ORDER = ["discovery", "planning", "development", "qa", "done"];
-
 const NEXT_STAGE: Record<string, string> = {
   discovery: "planning",
   planning: "development",
@@ -52,6 +51,7 @@ export default function Board({
   const [openCardId, setOpenCardId] = useState<string | null>(null);
   const [transitionCardId, setTransitionCardId] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
+  const [showCancelled, setShowCancelled] = useState(false);
 
   useEffect(() => {
     const sb = createClient();
@@ -91,14 +91,24 @@ export default function Board({
     }
   }, []);
 
+  // Separa cards cancelled dos outros
+  const activeCards = useMemo(
+    () => cards.filter((c) => c.status !== "cancelled"),
+    [cards]
+  );
+  const cancelledCards = useMemo(
+    () => cards.filter((c) => c.status === "cancelled"),
+    [cards]
+  );
+
   const cardsByStage = useMemo(() => {
     const acc: Record<string, any[]> = {};
     for (const s of STAGE_ORDER) acc[s] = [];
-    for (const c of cards) {
+    for (const c of activeCards) {
       if (acc[c.stage]) acc[c.stage].push(c);
     }
     return acc;
-  }, [cards]);
+  }, [activeCards]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -119,17 +129,15 @@ export default function Board({
     const targetStage = String(over.id);
     if (targetStage === card.stage) return;
 
-    // Só permite drag pra próxima stage adjacente
     const expectedNext = NEXT_STAGE[card.stage];
     if (targetStage !== expectedNext) {
       setDragError(
-        `não dá pra pular etapas. ${card.stage} → ${expectedNext} é o próximo passo natural.`
+        `não dá pra pular etapas. ${card.stage} → ${expectedNext} é o próximo passo.`
       );
       setTimeout(() => setDragError(null), 4000);
       return;
     }
 
-    // Só permite drag se status é awaiting_review
     if (card.status !== "awaiting_review") {
       setDragError(
         `card precisa estar em "aguarda revisão" pra avançar (atual: ${card.status})`
@@ -138,12 +146,11 @@ export default function Board({
       return;
     }
 
-    // Abre o dialog de transição com preview
     setTransitionCardId(card.id);
   }
 
-  const totalCards = cards.length;
-  const openGates = cards.filter((c) =>
+  const totalCards = activeCards.length;
+  const openGates = activeCards.filter((c) =>
     c.human_gates?.some(
       (g: any) => g.decision === null && g.assignee_id === currentUser.id
     )
@@ -164,8 +171,14 @@ export default function Board({
           </div>
           <div className="flex items-center gap-4 text-xs text-ink-400 ml-4">
             <span>
-              <span className="text-ink-100">{totalCards}</span> cards
+              <span className="text-ink-100">{totalCards}</span> ativos
             </span>
+            {cancelledCards.length > 0 && (
+              <span className="text-ink-400">
+                <span className="text-ink-100">{cancelledCards.length}</span>{" "}
+                cancelados
+              </span>
+            )}
             {openGates > 0 && (
               <span className="text-planning">
                 <span className="font-semibold">{openGates}</span> aguardam você
@@ -244,6 +257,42 @@ export default function Board({
           {activeCard ? <FeatureCard card={activeCard} dragging /> : null}
         </DragOverlay>
       </DndContext>
+
+      {/* Cancelled section */}
+      {cancelledCards.length > 0 && (
+        <div className="border-t border-ink-800">
+          <button
+            onClick={() => setShowCancelled(!showCancelled)}
+            className="w-full px-6 py-2 flex items-center justify-between text-xs uppercase tracking-widest text-ink-400 hover:text-ink-100 hover:bg-ink-900/40 transition-colors"
+          >
+            <span>
+              // cancelados ({cancelledCards.length})
+            </span>
+            <span>{showCancelled ? "▼ ocultar" : "▶ mostrar"}</span>
+          </button>
+          {showCancelled && (
+            <div className="px-6 pb-4">
+              <div className="flex flex-wrap gap-2">
+                {cancelledCards.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => setOpenCardId(c.id)}
+                    className="border border-ink-800 hover:border-ink-600 bg-ink-900/40 p-2 text-left max-w-xs opacity-60 hover:opacity-100 transition-all"
+                  >
+                    <div className="text-xs text-ink-300 line-through">
+                      {c.feature?.title}
+                    </div>
+                    <div className="text-[10px] text-ink-500">{c.feature?.slug}</div>
+                    <div className="text-[10px] text-ink-400 mt-1">
+                      stage at cancel: {c.stage}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {showCreate && (
         <CreateFeatureDialog onClose={() => setShowCreate(false)} />

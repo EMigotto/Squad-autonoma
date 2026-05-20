@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
 import { beta } from "@/lib/claude";
-import {
-  ALL_ROLES,
-  buildSpec,
-  hashPrompt,
-  type AgentRole,
-} from "@/lib/agents";
+import { BUILTIN_AGENTS, buildClaudeSpec, hashPrompt } from "@/lib/agents";
 import { createServiceClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -20,18 +15,44 @@ export async function POST(req: Request) {
 
     if (!process.env.ANTHROPIC_API_KEY) {
       return NextResponse.json(
-        { error: "ANTHROPIC_API_KEY não está configurada nas env vars" },
-        { status: 500 }
-      );
-    }
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      return NextResponse.json(
-        { error: "SUPABASE_SERVICE_ROLE_KEY não está configurada" },
+        { error: "ANTHROPIC_API_KEY não configurada" },
         { status: 500 }
       );
     }
 
     const sb = createServiceClient();
+
+    // 1. SEED: insere builtin agents em agent_definitions se ainda não estão lá
+    for (const a of BUILTIN_AGENTS) {
+      await sb.from("agent_definitions").upsert(
+        {
+          role: a.role,
+          name: a.name,
+          stage: a.stage,
+          model: a.model,
+          system_prompt: a.system_prompt,
+          sort_order: a.sort_order,
+          enabled: true,
+          is_builtin: true,
+          description: a.description,
+        },
+        { onConflict: "role", ignoreDuplicates: true }
+      );
+    }
+
+    // 2. DEPLOY: pega TODAS as agent_definitions (builtin + custom) e sincroniza com Claude
+    const { data: definitions } = await sb
+      .from("agent_definitions")
+      .select("*")
+      .eq("enabled", true);
+
+    if (!definitions) {
+      return NextResponse.json(
+        { error: "failed to load agent_definitions" },
+        { status: 500 }
+      );
+    }
+
     const results: Array<{
       role: string;
       action: string;
@@ -40,29 +61,32 @@ export async function POST(req: Request) {
       error?: string;
     }> = [];
 
-    for (const role of ALL_ROLES) {
+    for (const def of definitions) {
       try {
-        const spec = buildSpec(role as AgentRole);
-        const promptHash = hashPrompt(spec.system);
+        const spec = buildClaudeSpec({
+          name: def.name,
+          model: def.model,
+          system_prompt: def.system_prompt,
+        });
+        const promptHash = hashPrompt(def.system_prompt);
 
-        // INCLUI claude_agent_version no select — necessário pro update
         const { data: existing } = await sb
           .from("agents")
           .select("claude_agent_id, system_prompt_hash, claude_agent_version")
-          .eq("role", role)
+          .eq("role", def.role)
           .eq("is_current", true)
           .single();
 
         if (!existing) {
           const agent = await beta.agents.create(spec);
           await sb.from("agents").insert({
-            role,
+            role: def.role,
             claude_agent_id: agent.id,
             claude_agent_version: agent.version ?? 1,
             system_prompt_hash: promptHash,
           });
           results.push({
-            role,
+            role: def.role,
             action: "created",
             id: agent.id,
             version: agent.version ?? 1,
@@ -72,7 +96,7 @@ export async function POST(req: Request) {
 
         if (existing.system_prompt_hash === promptHash) {
           results.push({
-            role,
+            role: def.role,
             action: "no-op",
             id: existing.claude_agent_id,
             version: existing.claude_agent_version,
@@ -80,32 +104,27 @@ export async function POST(req: Request) {
           continue;
         }
 
-        // PASSA version no update — optimistic lock que a API exige
         const agent = await beta.agents.update(existing.claude_agent_id, {
           ...spec,
           version: existing.claude_agent_version,
         });
-
-        await sb
-          .from("agents")
-          .update({ is_current: false })
-          .eq("role", role);
+        await sb.from("agents").update({ is_current: false }).eq("role", def.role);
         await sb.from("agents").insert({
-          role,
+          role: def.role,
           claude_agent_id: agent.id,
           claude_agent_version: agent.version,
           system_prompt_hash: promptHash,
         });
         results.push({
-          role,
+          role: def.role,
           action: "updated",
           id: agent.id,
           version: agent.version,
         });
       } catch (roleErr) {
         const msg = roleErr instanceof Error ? roleErr.message : String(roleErr);
-        console.error(`[setup-agents] erro no role=${role}:`, roleErr);
-        results.push({ role, action: "error", error: msg });
+        console.error(`[setup-agents] erro no role=${def.role}:`, roleErr);
+        results.push({ role: def.role, action: "error", error: msg });
       }
     }
 

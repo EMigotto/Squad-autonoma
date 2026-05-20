@@ -14,7 +14,6 @@ interface SessionState {
   status: string;
   agent_name?: string;
   tokens_used?: number;
-  duration_ms?: number;
   events: any[];
   loading: boolean;
   error?: string;
@@ -25,6 +24,22 @@ interface ChatMessage {
   role: "user" | "agent" | "system";
   content: string;
   created_at: string;
+}
+
+interface ArtifactFile {
+  name: string;
+  path: string;
+  type: string;
+  size: number;
+}
+
+interface ArtifactsState {
+  files: ArtifactFile[];
+  branch?: string;
+  branches_available?: string[];
+  message?: string;
+  loading: boolean;
+  error?: string;
 }
 
 export default function CardDetailPanel({
@@ -45,12 +60,23 @@ export default function CardDetailPanel({
   const [showCancel, setShowCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
+  const [artifacts, setArtifacts] = useState<ArtifactsState>({
+    files: [],
+    loading: true,
+  });
+  const [openArtifact, setOpenArtifact] = useState<{
+    path: string;
+    name: string;
+    content?: string;
+    loading: boolean;
+    html_url?: string;
+  } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Carrega detalhes
   useEffect(() => {
     loadDetail();
     loadChatHistory();
+    loadArtifacts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardId]);
 
@@ -74,11 +100,19 @@ export default function CardDetailPanel({
       .select("*")
       .eq("feature_id", card.feature.id);
 
+    // Pega stage runs também
+    const { data: stageRuns } = await sb
+      .from("card_stage_runs")
+      .select("*")
+      .eq("card_id", cardId)
+      .order("started_at", { ascending: true });
+
     setDetail({
       card,
       feature: card.feature,
       gate,
       attachments: attachments ?? [],
+      stageRuns: stageRuns ?? [],
     });
   }
 
@@ -90,7 +124,48 @@ export default function CardDetailPanel({
     }
   }
 
-  // Auto-refresh session events
+  async function loadArtifacts() {
+    setArtifacts((s) => ({ ...s, loading: true }));
+    try {
+      const res = await fetch(`/api/cards/${cardId}/artifacts`);
+      const data = await res.json();
+      setArtifacts({
+        files: data.files ?? [],
+        branch: data.branch,
+        branches_available: data.branches_available,
+        message: data.message,
+        loading: false,
+        error: data.error,
+      });
+    } catch (e) {
+      setArtifacts({
+        files: [],
+        loading: false,
+        error: String(e),
+      });
+    }
+  }
+
+  async function openFile(file: ArtifactFile) {
+    setOpenArtifact({
+      path: file.path,
+      name: file.name,
+      loading: true,
+    });
+    const url = `/api/cards/${cardId}/artifacts/file?path=${encodeURIComponent(
+      file.path
+    )}&branch=${encodeURIComponent(artifacts.branch ?? "main")}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    setOpenArtifact({
+      path: file.path,
+      name: file.name,
+      loading: false,
+      content: data.content,
+      html_url: data.html_url,
+    });
+  }
+
   useEffect(() => {
     if (!detail?.card?.claude_session_id) {
       setSession((s) => ({ ...s, loading: false }));
@@ -119,18 +194,13 @@ export default function CardDetailPanel({
           status: data.status ?? "unknown",
           agent_name: data.agent_name,
           tokens_used: data.tokens_used,
-          duration_ms: data.duration_ms,
           events: data.events ?? [],
           loading: false,
         });
-        // Sync também o chat history pra mostrar a resposta do agent
         loadChatHistory();
-        // Reload detail pra pegar status novo
-        if (
-          data.status === "idle" ||
-          data.status === "completed"
-        ) {
+        if (data.status === "idle" || data.status === "completed") {
           loadDetail();
+          loadArtifacts(); // re-fetch artifacts quando agent termina
         }
         if (
           data.status === "running" ||
@@ -157,7 +227,6 @@ export default function CardDetailPanel({
     };
   }, [detail?.card?.claude_session_id, detail?.card?.status]);
 
-  // Scroll chat to bottom on new messages
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory.length]);
@@ -177,7 +246,7 @@ export default function CardDetailPanel({
       } else {
         setChatInput("");
         await loadChatHistory();
-        await loadDetail(); // status volta pra running
+        await loadDetail();
       }
     } finally {
       setChatSending(false);
@@ -186,7 +255,7 @@ export default function CardDetailPanel({
 
   async function handleCancel() {
     if (!cancelReason.trim()) {
-      alert("informe o motivo do cancelamento");
+      alert("informe o motivo");
       return;
     }
     setActionLoading(true);
@@ -199,29 +268,18 @@ export default function CardDetailPanel({
       onClose();
       window.location.reload();
     } else {
-      const j = await res.json().catch(() => ({}));
-      alert("erro: " + (j.error ?? res.status));
       setActionLoading(false);
     }
   }
 
   async function handleCompleteEarly() {
-    if (
-      !confirm(
-        "marcar como concluída antecipadamente? as etapas pendentes serão puladas."
-      )
-    )
-      return;
+    if (!confirm("marcar como concluída antecipadamente?")) return;
     setActionLoading(true);
-    const res = await fetch(`/api/cards/${cardId}/complete`, {
-      method: "POST",
-    });
+    const res = await fetch(`/api/cards/${cardId}/complete`, { method: "POST" });
     if (res.ok) {
       onClose();
       window.location.reload();
     } else {
-      const j = await res.json().catch(() => ({}));
-      alert("erro: " + (j.error ?? res.status));
       setActionLoading(false);
     }
   }
@@ -250,7 +308,7 @@ export default function CardDetailPanel({
     );
   }
 
-  const { card, feature, gate, attachments } = detail;
+  const { card, feature, gate, attachments, stageRuns } = detail;
   const isMineToReview = gate && gate.assignee_id === currentUser.id;
   const isTerminal =
     card.status === "done" ||
@@ -266,7 +324,6 @@ export default function CardDetailPanel({
           className="bg-ink-950 border-l border-ink-700 w-full max-w-3xl flex flex-col"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Header */}
           <div className="border-b border-ink-700 p-5 flex items-start justify-between shrink-0">
             <div>
               <div className="text-xs uppercase tracking-widest text-ink-400">
@@ -283,15 +340,47 @@ export default function CardDetailPanel({
             </button>
           </div>
 
-          {/* Body */}
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            {/* Feature context */}
+            {/* Histórico de stages percorridas */}
+            {stageRuns && stageRuns.length > 0 && (
+              <Section title="histórico de execução">
+                <div className="space-y-1">
+                  {stageRuns.map((r: any) => (
+                    <div
+                      key={r.id}
+                      className="flex items-center gap-3 text-xs"
+                    >
+                      <span
+                        className={
+                          r.status === "completed"
+                            ? "text-qa"
+                            : r.status === "failed"
+                              ? "text-discovery"
+                              : "text-development"
+                        }
+                      >
+                        {r.status === "completed"
+                          ? "✓"
+                          : r.status === "failed"
+                            ? "✗"
+                            : "●"}
+                      </span>
+                      <span className="text-ink-100">{r.stage}</span>
+                      <span className="text-ink-400">·</span>
+                      <span className="text-ink-400">
+                        {r.agent_role ?? "?"}
+                      </span>
+                      <span className="text-ink-400 ml-auto">
+                        {new Date(r.started_at).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+
             <Section title="contexto">
-              <Field
-                label="descrição"
-                value={feature.description}
-                multiline
-              />
+              <Field label="descrição" value={feature.description} multiline />
               <Field
                 label="repo"
                 value={
@@ -321,7 +410,49 @@ export default function CardDetailPanel({
               )}
             </Section>
 
-            {/* Session viewer */}
+            {/* Artefatos gerados — file viewer */}
+            <Section title="artefatos gerados">
+              {artifacts.loading && (
+                <div className="text-xs text-ink-400">carregando do GitHub...</div>
+              )}
+              {artifacts.error && (
+                <div className="text-xs text-qa border border-qa/40 bg-qa/5 p-2 font-mono">
+                  {artifacts.error}
+                </div>
+              )}
+              {!artifacts.loading && artifacts.files.length === 0 && (
+                <div className="text-xs text-ink-400 italic">
+                  {artifacts.message ?? "ainda sem arquivos no repositório"}
+                </div>
+              )}
+              {artifacts.files.length > 0 && (
+                <>
+                  <div className="text-[11px] text-ink-400 mb-2">
+                    branch: <span className="font-mono text-ink-300">{artifacts.branch}</span>
+                  </div>
+                  <div className="space-y-1">
+                    {artifacts.files.map((f) => (
+                      <button
+                        key={f.path}
+                        onClick={() => openFile(f)}
+                        className="w-full flex items-center justify-between p-2 border border-ink-800 hover:border-ink-600 bg-ink-900/40 text-left transition-colors"
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <FileIcon name={f.name} />
+                          <span className="text-sm text-ink-100 truncate">
+                            {f.path.replace(`docs/features/${feature.slug}/`, "")}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-ink-400 shrink-0">
+                          {(f.size / 1024).toFixed(1)}kb
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </Section>
+
             {card.claude_session_id && (
               <Section title="sessão claude (live)">
                 <div className="flex items-center gap-3 text-xs mb-3 flex-wrap">
@@ -340,9 +471,6 @@ export default function CardDetailPanel({
                     Console ↗
                   </a>
                 </div>
-                {session.loading && (
-                  <div className="text-xs text-ink-400">carregando...</div>
-                )}
                 {session.error && (
                   <div className="text-xs text-qa border border-qa/40 bg-qa/5 p-2 font-mono mb-2">
                     {session.error}
@@ -352,28 +480,25 @@ export default function CardDetailPanel({
               </Section>
             )}
 
-            {/* Gate summary */}
             {gate?.summary && (
-              <Section title={isAwaitingReview ? "proposta do agente" : "resumo"}>
+              <Section title="proposta / resumo">
                 <div className="border border-ink-700 bg-ink-900 p-3 text-xs whitespace-pre-wrap text-ink-100 max-h-64 overflow-y-auto">
                   {gate.summary}
                 </div>
               </Section>
             )}
 
-            {/* Chat com agent */}
             {canChat && (
               <Section title="conversar com o agente">
                 <div className="text-[11px] text-ink-400 mb-3">
-                  Use o chat pra pedir mudanças no plano ou esclarecer. O agente
-                  retoma de onde parou e atualiza os artefatos no repo.
+                  Peça mudanças no plano ou esclarecimentos. O agente retoma e
+                  atualiza arquivos no repo.
                 </div>
 
                 <div className="border border-ink-700 bg-ink-900 max-h-64 overflow-y-auto p-3 space-y-3 mb-3">
                   {chatHistory.length === 0 && (
                     <div className="text-xs text-ink-400 italic">
-                      ainda sem mensagens no chat. o agente recebeu o briefing
-                      inicial; mande uma mensagem pra refinar.
+                      ainda sem mensagens
                     </div>
                   )}
                   {chatHistory
@@ -388,7 +513,7 @@ export default function CardDetailPanel({
                   <textarea
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="ex: separe esse chunk em dois, um pra API e outro pra UI..."
+                    placeholder="ex: divida esse chunk em dois..."
                     rows={2}
                     disabled={chatSending || session.status === "running"}
                     className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none disabled:opacity-50"
@@ -421,7 +546,6 @@ export default function CardDetailPanel({
               </Section>
             )}
 
-            {/* Actions */}
             {!isTerminal && (
               <Section title="ações">
                 <div className="flex flex-wrap gap-2">
@@ -466,15 +590,21 @@ export default function CardDetailPanel({
 
             {isTerminal && (
               <div className="text-xs text-ink-400 italic">
-                Esta feature está em estado terminal ({card.status}). Nenhuma ação
-                disponível.
+                Esta feature está em estado terminal ({card.status}).
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Transition Dialog */}
+      {/* Artifact file viewer modal */}
+      {openArtifact && (
+        <ArtifactViewer
+          artifact={openArtifact}
+          onClose={() => setOpenArtifact(null)}
+        />
+      )}
+
       {showTransition && (
         <TransitionDialog
           cardId={cardId}
@@ -487,7 +617,6 @@ export default function CardDetailPanel({
         />
       )}
 
-      {/* Cancel modal */}
       {showCancel && (
         <div className="fixed inset-0 bg-ink-950/90 flex items-center justify-center p-4 z-[60]">
           <div className="bg-ink-900 border border-qa w-full max-w-md p-6 space-y-4">
@@ -495,19 +624,16 @@ export default function CardDetailPanel({
               <div className="text-xs uppercase tracking-widest text-qa">
                 // cancelar feature
               </div>
-              <div className="text-lg font-semibold mt-1">
-                Tem certeza?
-              </div>
+              <div className="text-lg font-semibold mt-1">Tem certeza?</div>
               <div className="text-sm text-ink-300 mt-2">
-                O card será marcado como cancelled. Trabalho do agente em
-                andamento será descartado.
+                O card vai pra seção de cancelados e sai do Kanban ativo.
               </div>
             </div>
             <textarea
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
               rows={3}
-              placeholder="motivo do cancelamento (vai pro histórico)"
+              placeholder="motivo (vai pro histórico)"
               className="w-full bg-ink-950 border border-ink-700 px-2 py-1.5 text-sm focus:border-qa focus:outline-none"
             />
             <div className="flex justify-end gap-2">
@@ -522,7 +648,7 @@ export default function CardDetailPanel({
                 disabled={actionLoading || !cancelReason.trim()}
                 className="bg-qa text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-qa/80 disabled:opacity-50"
               >
-                {actionLoading ? "..." : "cancelar feature"}
+                {actionLoading ? "..." : "cancelar"}
               </button>
             </div>
           </div>
@@ -530,6 +656,150 @@ export default function CardDetailPanel({
       )}
     </>
   );
+}
+
+function ArtifactViewer({
+  artifact,
+  onClose,
+}: {
+  artifact: {
+    path: string;
+    name: string;
+    content?: string;
+    loading: boolean;
+    html_url?: string;
+  };
+  onClose: () => void;
+}) {
+  const isHtml = artifact.name.toLowerCase().endsWith(".html");
+  const isMarkdown =
+    artifact.name.toLowerCase().endsWith(".md") ||
+    artifact.name.toLowerCase().endsWith(".markdown");
+  const [renderMode, setRenderMode] = useState<"source" | "preview">(
+    isHtml ? "preview" : "source"
+  );
+
+  return (
+    <div
+      className="fixed inset-0 bg-ink-950/95 z-[70] flex items-stretch justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-ink-950 border border-ink-700 w-full max-w-5xl flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-ink-700 p-4 flex items-center justify-between shrink-0">
+          <div className="min-w-0">
+            <div className="text-xs uppercase tracking-widest text-ink-400">
+              // {artifact.path}
+            </div>
+            <div className="text-base font-semibold truncate">
+              {artifact.name}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {(isHtml || isMarkdown) && (
+              <button
+                onClick={() =>
+                  setRenderMode(renderMode === "source" ? "preview" : "source")
+                }
+                className="text-xs text-development hover:underline px-2"
+              >
+                {renderMode === "source" ? "preview" : "source"}
+              </button>
+            )}
+            {artifact.html_url && (
+              <a
+                href={artifact.html_url}
+                target="_blank"
+                rel="noopener"
+                className="text-xs text-development hover:underline px-2"
+              >
+                GitHub ↗
+              </a>
+            )}
+            <button
+              onClick={onClose}
+              className="text-ink-400 hover:text-ink-100 text-2xl leading-none"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {artifact.loading && (
+            <div className="p-8 text-center text-sm text-ink-300">
+              carregando...
+            </div>
+          )}
+
+          {!artifact.loading && artifact.content && (
+            <>
+              {isHtml && renderMode === "preview" ? (
+                <iframe
+                  srcDoc={artifact.content}
+                  sandbox="allow-scripts"
+                  className="w-full h-[80vh] border-0 bg-white"
+                  title={artifact.name}
+                />
+              ) : isMarkdown && renderMode === "preview" ? (
+                <MarkdownPreview content={artifact.content} />
+              ) : (
+                <pre className="p-4 text-xs text-ink-100 whitespace-pre-wrap font-mono leading-relaxed">
+                  {artifact.content}
+                </pre>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renderizador de markdown bem básico — sem deps externas.
+ * Suporta: headers, bold, italic, code, lists, links, code blocks.
+ */
+function MarkdownPreview({ content }: { content: string }) {
+  // Implementação super simples — não é Marked.js mas serve pra visualizar
+  const html = content
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/```([^`]*?)```/gs, '<pre class="bg-ink-900 p-3 border border-ink-700 my-3 overflow-x-auto"><code>$1</code></pre>')
+    .replace(/`([^`]+)`/g, '<code class="bg-ink-900 px-1 text-development">$1</code>')
+    .replace(/^### (.*$)/gm, '<h3 class="text-base font-semibold mt-4 mb-2 text-ink-100">$1</h3>')
+    .replace(/^## (.*$)/gm, '<h2 class="text-lg font-semibold mt-5 mb-2 text-ink-100">$1</h2>')
+    .replace(/^# (.*$)/gm, '<h1 class="text-xl font-bold mt-6 mb-3 text-ink-100">$1</h1>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="text-ink-100">$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/^- (.*$)/gm, '<li class="ml-4">$1</li>')
+    .replace(/\n\n/g, '</p><p class="my-2">')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-development hover:underline" target="_blank">$1</a>');
+
+  return (
+    <div
+      className="p-6 text-sm text-ink-200 leading-relaxed prose-invert max-w-none"
+      dangerouslySetInnerHTML={{ __html: "<p>" + html + "</p>" }}
+    />
+  );
+}
+
+function FileIcon({ name }: { name: string }) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  const icon =
+    ext === "md" || ext === "markdown"
+      ? "📄"
+      : ext === "html" || ext === "htm"
+        ? "🌐"
+        : ext === "json" || ext === "yaml" || ext === "yml"
+          ? "⚙️"
+          : ext === "ts" || ext === "tsx" || ext === "js" || ext === "jsx"
+            ? "💻"
+            : "📎";
+  return <span className="text-xs">{icon}</span>;
 }
 
 function Section({
@@ -597,11 +867,7 @@ function StatusPill({ status }: { status: string }) {
 
 function EventTimeline({ events }: { events: any[] }) {
   if (events.length === 0) {
-    return (
-      <div className="text-xs text-ink-400 italic">
-        ainda sem eventos
-      </div>
-    );
+    return <div className="text-xs text-ink-400 italic">sem eventos</div>;
   }
   return (
     <div className="space-y-1 max-h-72 overflow-y-auto">
@@ -670,21 +936,19 @@ function EventRow({ event }: { event: any }) {
 function ChatBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
-
   if (isSystem) {
     return (
       <div className="text-[10px] text-ink-400 italic border border-ink-800 p-2">
-        [briefing inicial enviado · {new Date(message.created_at).toLocaleTimeString()}]
+        [briefing inicial ·{" "}
+        {new Date(message.created_at).toLocaleTimeString()}]
       </div>
     );
   }
-
   return (
-    <div
-      className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
-    >
+    <div className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
       <div className="text-[10px] text-ink-400 mb-0.5">
-        {isUser ? "você" : "agent"} · {new Date(message.created_at).toLocaleTimeString()}
+        {isUser ? "você" : "agent"} ·{" "}
+        {new Date(message.created_at).toLocaleTimeString()}
       </div>
       <div
         className={`max-w-[85%] px-3 py-2 text-xs whitespace-pre-wrap ${
