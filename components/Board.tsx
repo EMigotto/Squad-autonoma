@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   DndContext,
   DragOverlay,
@@ -14,12 +15,18 @@ import { createClient } from "@/lib/supabase/client";
 import Column from "./Column";
 import FeatureCard from "./FeatureCard";
 import CreateFeatureDialog from "./CreateFeatureDialog";
-import GateDialog from "./GateDialog";
+import CardDetailPanel from "./CardDetailPanel";
 
 interface Props {
   currentUser: { id: string; name: string; role: string };
   initialStages: { code: string; label: string; sort_order: number }[];
   initialCards: any[];
+  settings: any;
+  diagnostics?: {
+    stagesError?: string;
+    cardsError?: string;
+    stagesFromFallback?: boolean;
+  };
 }
 
 const STAGE_ORDER = ["discovery", "planning", "development", "qa", "done"];
@@ -28,15 +35,13 @@ export default function Board({
   currentUser,
   initialStages,
   initialCards,
+  settings,
+  diagnostics,
 }: Props) {
   const [cards, setCards] = useState(initialCards);
   const [activeCard, setActiveCard] = useState<any | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [openGate, setOpenGate] = useState<{
-    gateId: string;
-    card: any;
-    targetStage?: string;
-  } | null>(null);
+  const [openCardId, setOpenCardId] = useState<string | null>(null);
 
   // Realtime: re-fetch quando cards mudam
   useEffect(() => {
@@ -46,16 +51,12 @@ export default function Board({
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "cards" },
-        async () => {
-          await refresh();
-        }
+        () => refresh()
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "human_gates" },
-        async () => {
-          await refresh();
-        }
+        () => refresh()
       )
       .subscribe();
 
@@ -68,7 +69,7 @@ export default function Board({
         .from("cards")
         .select(
           `id, stage, status, claude_session_id, updated_at,
-           feature:features ( id, slug, title ),
+           feature:features ( id, slug, title, github_repo, claude_environment_id ),
            human_gates ( id, summary, decision, assignee_id )`
         )
         .order("updated_at", { ascending: false });
@@ -98,36 +99,21 @@ export default function Board({
     const { active, over } = e;
     setActiveCard(null);
     if (!over) return;
-
     const card = cards.find((c) => c.id === active.id);
     if (!card) return;
-
     const targetStage = String(over.id);
     if (targetStage === card.stage) return;
 
-    // Só pode mover se: o card está awaiting_review E o target é stage seguinte
-    const idxCurrent = STAGE_ORDER.indexOf(card.stage);
-    const idxTarget = STAGE_ORDER.indexOf(targetStage);
-
-    const openGate = card.human_gates?.find((g: any) => g.decision === null);
-
-    if (!openGate) {
-      alert(
-        "Esse card não está aguardando revisão. Espera o agente terminar antes de mover."
-      );
-      return;
-    }
-
-    if (idxTarget === idxCurrent + 1) {
-      // Aprovar e avançar
-      setOpenGate({ gateId: openGate.id, card, targetStage: "approved" });
-    } else if (idxTarget === idxCurrent - 1) {
-      // Rejeitar (mandar voltar) — modal pede reason
-      setOpenGate({ gateId: openGate.id, card, targetStage: "rejected" });
-    } else {
-      alert("Você só pode mover um card pra coluna adjacente.");
-    }
+    // Drag pra outra coluna: abre o detail panel pra decidir
+    setOpenCardId(card.id);
   }
+
+  const totalCards = cards.length;
+  const openGates = cards.filter((c) =>
+    c.human_gates?.some(
+      (g: any) => g.decision === null && g.assignee_id === currentUser.id
+    )
+  ).length;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -143,14 +129,57 @@ export default function Board({
               <span className="text-ink-400"> · {currentUser.role}</span>
             </div>
           </div>
+
+          <div className="flex items-center gap-4 text-xs text-ink-400 ml-4">
+            <span>
+              <span className="text-ink-100">{totalCards}</span> cards
+            </span>
+            {openGates > 0 && (
+              <span className="text-planning">
+                <span className="font-semibold">{openGates}</span> aguardam você
+              </span>
+            )}
+          </div>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300 transition-colors"
-        >
-          + nova feature
-        </button>
+
+        <div className="flex items-center gap-2">
+          <Link
+            href="/settings"
+            className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100 px-3 py-1.5"
+          >
+            settings
+          </Link>
+          <Link
+            href="/admin/setup"
+            className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100 px-3 py-1.5"
+          >
+            admin
+          </Link>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300 transition-colors"
+          >
+            + nova feature
+          </button>
+        </div>
       </header>
+
+      {/* Diagnostics banner */}
+      {diagnostics?.stagesError && (
+        <div className="border-b border-qa bg-qa/10 px-6 py-2 text-xs text-qa font-mono">
+          aviso: erro ao carregar stages — {diagnostics.stagesError}. Usando fallback.
+        </div>
+      )}
+      {diagnostics?.stagesFromFallback && !diagnostics?.stagesError && (
+        <div className="border-b border-planning bg-planning/10 px-6 py-2 text-xs text-planning font-mono">
+          aviso: tabela stages está vazia no Supabase. Rode a migration v3-migration.sql.
+        </div>
+      )}
+      {settings?.auto_merge_prs && (
+        <div className="border-b border-development bg-development/10 px-6 py-2 text-xs text-development font-mono">
+          ⚡ modo automático ativo: PRs serão merged automaticamente após CI verde
+        </div>
+      )}
 
       {/* Board */}
       <DndContext
@@ -160,14 +189,19 @@ export default function Board({
       >
         <div className="flex-1 overflow-x-auto">
           <div className="flex gap-4 p-6 min-h-full">
-            {initialStages.map((stage) => (
-              <Column
-                key={stage.code}
-                stage={stage}
-                cards={cardsByStage[stage.code] ?? []}
-                currentUser={currentUser}
-              />
-            ))}
+            {initialStages.length === 0 ? (
+              <EmptyState />
+            ) : (
+              initialStages.map((stage) => (
+                <Column
+                  key={stage.code}
+                  stage={stage}
+                  cards={cardsByStage[stage.code] ?? []}
+                  currentUser={currentUser}
+                  onCardClick={(cardId) => setOpenCardId(cardId)}
+                />
+              ))
+            )}
           </div>
         </div>
 
@@ -180,14 +214,30 @@ export default function Board({
         <CreateFeatureDialog onClose={() => setShowCreate(false)} />
       )}
 
-      {openGate && (
-        <GateDialog
-          gateId={openGate.gateId}
-          card={openGate.card}
-          mode={openGate.targetStage === "rejected" ? "reject" : "approve"}
-          onClose={() => setOpenGate(null)}
+      {openCardId && (
+        <CardDetailPanel
+          cardId={openCardId}
+          currentUser={currentUser}
+          onClose={() => setOpenCardId(null)}
         />
       )}
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="flex-1 flex items-center justify-center">
+      <div className="max-w-md text-center">
+        <div className="text-xs uppercase tracking-widest text-ink-400 mb-2">
+          // sem colunas
+        </div>
+        <div className="text-sm text-ink-300 mb-4">
+          Nenhum stage encontrado no banco. Rode a migration{" "}
+          <code className="text-ink-100">v3-migration.sql</code> no Supabase para
+          habilitar as policies de RLS.
+        </div>
+      </div>
     </div>
   );
 }

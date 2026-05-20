@@ -15,9 +15,10 @@ interface Props {
   stage: { code: string; label: string };
   cards: any[];
   currentUser: { id: string; role: string };
+  onCardClick?: (cardId: string) => void;
 }
 
-export default function Column({ stage, cards, currentUser }: Props) {
+export default function Column({ stage, cards, currentUser, onCardClick }: Props) {
   const { isOver, setNodeRef } = useDroppable({ id: stage.code });
   const colorClass = STAGE_COLORS[stage.code] ?? "text-ink-300";
 
@@ -28,7 +29,6 @@ export default function Column({ stage, cards, currentUser }: Props) {
         isOver ? "border-ink-100" : "border-ink-700"
       } transition-colors`}
     >
-      {/* Column header */}
       <div className={`px-3 py-2 border-b ${colorClass}`}>
         <div className="flex items-center justify-between text-xs uppercase tracking-widest">
           <span>{stage.label}</span>
@@ -36,15 +36,19 @@ export default function Column({ stage, cards, currentUser }: Props) {
         </div>
       </div>
 
-      {/* Cards */}
-      <div className="flex-1 p-2 space-y-2 overflow-y-auto">
+      <div className="flex-1 p-2 space-y-2 overflow-y-auto min-h-[200px]">
         {cards.length === 0 && (
           <div className="text-xs text-ink-400 p-3 text-center">
             // vazio
           </div>
         )}
         {cards.map((c) => (
-          <FeatureCard key={c.id} card={c} currentUser={currentUser} />
+          <FeatureCard
+            key={c.id}
+            card={c}
+            currentUser={currentUser}
+            onClick={() => onCardClick?.(c.id)}
+          />
         ))}
       </div>
     </div>

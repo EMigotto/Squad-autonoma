@@ -16,14 +16,15 @@ interface Props {
   card: any;
   currentUser?: { id: string; role: string };
   dragging?: boolean;
+  onClick?: () => void;
 }
 
-export default function FeatureCard({ card, currentUser, dragging }: Props) {
+export default function FeatureCard({ card, currentUser, dragging, onClick }: Props) {
   const isAwaitingReview = card.status === "awaiting_review";
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: card.id,
-      disabled: !isAwaitingReview, // só pode arrastar quando aguarda revisão
+      disabled: !isAwaitingReview,
     });
 
   const style = {
@@ -40,14 +41,27 @@ export default function FeatureCard({ card, currentUser, dragging }: Props) {
     <div
       ref={setNodeRef}
       style={style}
-      {...attributes}
-      {...listeners}
       className={`card-surface p-3 border ${
         mineToReview ? "border-planning" : "border-ink-700"
-      } ${
-        isAwaitingReview && !dragging ? "cursor-grab" : "cursor-default"
-      } hover:border-ink-600 transition-colors`}
+      } hover:border-ink-600 transition-colors cursor-pointer relative group`}
+      onClick={(e) => {
+        // Só dispara click se não estiver dragging
+        if (!isDragging) onClick?.();
+      }}
     >
+      {/* Drag handle só na área superior */}
+      {isAwaitingReview && (
+        <div
+          {...attributes}
+          {...listeners}
+          className="absolute top-0 right-0 px-2 py-1 text-ink-400 hover:text-ink-100 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 text-[10px]"
+          onClick={(e) => e.stopPropagation()}
+          title="arrastar"
+        >
+          ⋮⋮
+        </div>
+      )}
+
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="text-sm leading-tight">{card.feature?.title}</div>
         {mineToReview && (
@@ -57,9 +71,7 @@ export default function FeatureCard({ card, currentUser, dragging }: Props) {
         )}
       </div>
 
-      <div className="text-[11px] text-ink-400 mb-2">
-        {card.feature?.slug}
-      </div>
+      <div className="text-[11px] text-ink-400 mb-2">{card.feature?.slug}</div>
 
       <div className={`text-[11px] ${status.color}`}>{status.label}</div>
 
@@ -68,6 +80,10 @@ export default function FeatureCard({ card, currentUser, dragging }: Props) {
           {openGate.summary}
         </div>
       )}
+
+      <div className="mt-2 text-[10px] text-ink-400 opacity-60 group-hover:opacity-100">
+        clique para detalhes →
+      </div>
     </div>
   );
 }
