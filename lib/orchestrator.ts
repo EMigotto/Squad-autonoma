@@ -383,7 +383,13 @@ export async function advanceCard(
     })
     .eq("id", cardId);
 
-  await startStage(cardId, overrideInitialMessage);
+  // Development tem orquestração própria: lê chunks e dispara um Dev Agent
+  // por chunk seguindo o build order. As outras stages disparam uma sessão única.
+  if (nextStage === "development") {
+    await startDevelopmentStage(cardId);
+  } else {
+    await startStage(cardId, overrideInitialMessage);
+  }
 }
 
 // ============================================================
@@ -523,6 +529,433 @@ export async function createFeature(input: {
 
 export async function kickoffFirstStage(cardId: string): Promise<string> {
   return startStage(cardId);
+}
+
+// ============================================================
+// ORQUESTRAÇÃO DE CHUNKS (development)
+// ============================================================
+
+// Mapeia o skill de um chunk para o role do Dev Agent
+const SKILL_TO_ROLE: Record<string, string> = {
+  backend: "dev_backend",
+  frontend: "dev_frontend",
+  infra: "dev_infra",
+  data: "dev_backend", // fallback razoável
+};
+
+function extractSkillFromLabels(labels: string[]): string {
+  for (const l of labels) {
+    const m = l.match(/^skill:(\w+)/);
+    if (m) return m[1];
+  }
+  // tenta achar no título via prefixo [backend], [frontend], etc
+  return "backend";
+}
+
+/**
+ * Lê as issues (chunks) do GitHub com label feat:<slug> e persiste em `chunks`.
+ * Retorna os chunks ordenados por número da issue (proxy do build order).
+ */
+async function loadAndPersistChunks(
+  featureId: string,
+  repo: string,
+  slug: string
+): Promise<
+  Array<{
+    id: string;
+    title: string;
+    skill: string;
+    github_issue_number: number;
+    status: string;
+  }>
+> {
+  const sb = createServiceClient();
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new Error("GITHUB_TOKEN não configurado");
+
+  const url = `https://api.github.com/repos/${repo}/issues?state=all&labels=feat:${encodeURIComponent(
+    slug
+  )}&per_page=100`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`GitHub issues API ${res.status}`);
+  }
+  const items = await res.json();
+  const issues = (Array.isArray(items) ? items : []).filter(
+    (it: any) => !it.pull_request
+  );
+
+  // Ordena por número da issue (ordem de criação ≈ build order do TL)
+  issues.sort((a: any, b: any) => a.number - b.number);
+
+  const result = [];
+  for (const issue of issues) {
+    const labels = (issue.labels ?? []).map((l: any) =>
+      typeof l === "string" ? l : l.name
+    );
+    const skill = extractSkillFromLabels(labels);
+
+    // Upsert do chunk (idempotente por github_issue_number)
+    const { data: existing } = await sb
+      .from("chunks")
+      .select("id, status")
+      .eq("feature_id", featureId)
+      .eq("github_issue_number", issue.number)
+      .single();
+
+    let chunkId: string;
+    let status: string;
+    if (existing) {
+      chunkId = existing.id;
+      status = existing.status;
+    } else {
+      const { data: created } = await sb
+        .from("chunks")
+        .insert({
+          feature_id: featureId,
+          title: issue.title,
+          description: (issue.body ?? "").slice(0, 2000),
+          skill,
+          github_issue_number: issue.number,
+          status: "planned",
+        })
+        .select("id, status")
+        .single();
+      chunkId = created!.id;
+      status = created!.status;
+    }
+
+    result.push({
+      id: chunkId,
+      title: issue.title,
+      skill,
+      github_issue_number: issue.number,
+      status,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Entry point da stage de development: lê chunks e dispara o primeiro.
+ */
+export async function startDevelopmentStage(cardId: string): Promise<void> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*, feature:features(id, slug, github_repo)")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error("card not found");
+
+  const feature = card.feature as any;
+  const chunks = await loadAndPersistChunks(
+    feature.id,
+    feature.github_repo,
+    feature.slug
+  );
+
+  if (chunks.length === 0) {
+    // Sem chunks — cai pro comportamento padrão (dispara dev agent genérico)
+    await startStage(cardId);
+    return;
+  }
+
+  await startNextChunk(cardId);
+}
+
+/**
+ * Acha o próximo chunk 'planned' e dispara uma sessão de Dev Agent pra ele.
+ * Se não houver mais chunks pendentes, marca o card como awaiting_review.
+ * Chamado tanto no início da stage quanto pelo webhook quando um chunk termina.
+ */
+export async function startNextChunk(cardId: string): Promise<void> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*, feature:features(id, slug, github_repo, github_parent_issue, description, claude_environment_id)")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error("card not found");
+  const feature = card.feature as any;
+
+  // Próximo chunk não concluído (planned), por ordem de issue
+  const { data: nextChunk } = await sb
+    .from("chunks")
+    .select("*")
+    .eq("feature_id", feature.id)
+    .eq("status", "planned")
+    .order("github_issue_number", { ascending: true })
+    .limit(1)
+    .single();
+
+  if (!nextChunk) {
+    // Todos os chunks foram trabalhados → development completo, gate humano
+    await sb
+      .from("cards")
+      .update({ status: "awaiting_review", claude_session_id: null })
+      .eq("id", cardId);
+
+    // Cria gate pro Tech Lead humano revisar tudo antes de QA
+    const { data: tlUser } = await sb
+      .from("user_profiles")
+      .select("id")
+      .eq("role", "tech_lead")
+      .limit(1)
+      .single();
+
+    const { data: openGate } = await sb
+      .from("human_gates")
+      .select("id")
+      .eq("card_id", cardId)
+      .is("decision", null)
+      .single();
+
+    if (!openGate) {
+      await sb.from("human_gates").insert({
+        card_id: cardId,
+        stage: "development",
+        assignee_id: tlUser?.id ?? null,
+        summary:
+          "Todos os chunks foram implementados. Revise os PRs antes de avançar para QA.",
+      });
+    }
+    return;
+  }
+
+  // Escolhe o Dev Agent pelo skill do chunk
+  const role = SKILL_TO_ROLE[nextChunk.skill] ?? "dev_backend";
+  const { data: agentDef } = await sb
+    .from("agent_definitions")
+    .select("*")
+    .eq("role", role)
+    .eq("enabled", true)
+    .single();
+
+  // Fallback: se o role específico não existe/desabilitado, pega qualquer dev de development
+  let chosenDef = agentDef;
+  if (!chosenDef) {
+    const { data: anyDev } = await sb
+      .from("agent_definitions")
+      .select("*")
+      .eq("stage", "development")
+      .eq("enabled", true)
+      .order("sort_order", { ascending: true })
+      .limit(1)
+      .single();
+    chosenDef = anyDev;
+  }
+  if (!chosenDef) throw new Error("nenhum Dev Agent habilitado em development");
+
+  const { data: deployed } = await sb
+    .from("agents")
+    .select("*")
+    .eq("role", chosenDef.role)
+    .eq("is_current", true)
+    .single();
+  if (!deployed)
+    throw new Error(`Dev Agent ${chosenDef.role} não deployado; rode /admin/setup`);
+
+  // Garante environment
+  const feat = await ensureFeatureEnvironment(feature.id);
+  const attachments = await fetchAttachmentContents(feature.id);
+  const settings = await getAppSettings();
+
+  // Marca chunk como in_progress
+  await sb
+    .from("chunks")
+    .update({ status: "in_progress" })
+    .eq("id", nextChunk.id);
+
+  // Monta o kickoff específico do chunk
+  const userMsg = chunkKickoff(
+    feature,
+    nextChunk,
+    chosenDef.role,
+    attachments,
+    settings
+  );
+
+  const session = await beta.sessions.create({
+    agent: deployed.claude_agent_id,
+    environment_id: feat.claude_environment_id,
+    title: `${feature.slug} · chunk #${nextChunk.github_issue_number} (${chosenDef.role})`,
+  });
+
+  await beta.sessions.events.send(session.id, {
+    events: [{ type: "user.message", content: [{ type: "text", text: userMsg }] }],
+  });
+
+  // Registra chunk_run e stage_run
+  await sb.from("chunk_runs").insert({
+    chunk_id: nextChunk.id,
+    claude_session_id: session.id,
+    claude_agent_id: deployed.id,
+  });
+
+  await sb.from("card_stage_runs").insert({
+    card_id: cardId,
+    stage: "development",
+    agent_role: chosenDef.role,
+    claude_session_id: session.id,
+    status: "running",
+    summary: `Chunk #${nextChunk.github_issue_number}: ${nextChunk.title}`,
+  });
+
+  await sb
+    .from("cards")
+    .update({
+      claude_session_id: session.id,
+      claude_agent_id: deployed.id,
+      status: "running",
+    })
+    .eq("id", cardId);
+
+  await sb.from("card_chat_messages").insert({
+    card_id: cardId,
+    session_id: session.id,
+    role: "system",
+    content: userMsg,
+  });
+}
+
+/**
+ * Chamado pelo webhook quando uma sessão de chunk termina.
+ * Marca o chunk como done e dispara o próximo (ou finaliza a stage).
+ * Retorna true se era um chunk (e foi tratado), false caso contrário.
+ */
+export async function handleChunkSessionIdle(
+  sessionId: string
+): Promise<boolean> {
+  const sb = createServiceClient();
+
+  // É uma sessão de chunk?
+  const { data: chunkRun } = await sb
+    .from("chunk_runs")
+    .select("*, chunk:chunks(id, feature_id)")
+    .eq("claude_session_id", sessionId)
+    .single();
+
+  if (!chunkRun) return false; // não é chunk; deixa o handler normal cuidar
+
+  // Marca chunk como done e o run como finalizado
+  await sb
+    .from("chunks")
+    .update({ status: "done" })
+    .eq("id", chunkRun.chunk_id);
+  await sb
+    .from("chunk_runs")
+    .update({ finished_at: new Date().toISOString() })
+    .eq("id", chunkRun.id);
+
+  // Marca o stage_run dessa sessão como completed
+  await sb
+    .from("card_stage_runs")
+    .update({ status: "completed", ended_at: new Date().toISOString() })
+    .eq("claude_session_id", sessionId);
+
+  // Acha o card da feature
+  const featureId = (chunkRun.chunk as any).feature_id;
+  const { data: card } = await sb
+    .from("cards")
+    .select("id")
+    .eq("feature_id", featureId)
+    .eq("stage", "development")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  if (card) {
+    // Dispara o próximo chunk (ou finaliza a stage)
+    await startNextChunk(card.id);
+  }
+
+  return true;
+}
+
+function chunkKickoff(
+  feature: {
+    slug: string;
+    github_repo: string;
+    github_parent_issue: number | null;
+  },
+  chunk: { github_issue_number: number; title: string; skill: string },
+  role: string,
+  attachments: Array<{ filename: string; content: string; truncated: boolean }>,
+  settings: {
+    auto_merge_prs: boolean;
+    commit_to_existing_branch: boolean;
+    default_base_branch: string;
+  }
+): string {
+  const token = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
+  const [owner, repo] = feature.github_repo.split("/");
+
+  const credBlock =
+    `\n--- GitHub credentials ---\n` +
+    `Repo: ${feature.github_repo}\n` +
+    `Owner: ${owner}\nRepo name: ${repo}\n` +
+    `Token: ${token}\n` +
+    `Clone URL: https://x-access-token:${token}@github.com/${feature.github_repo}.git\n` +
+    `API auth header: Authorization: token ${token}\n` +
+    `Default base branch: ${settings.default_base_branch}\n---\n`;
+
+  let workflowBlock: string;
+  if (settings.commit_to_existing_branch) {
+    workflowBlock =
+      `\n--- Workflow mode: COMMIT-DIRECT ---\n` +
+      `Commit directly to '${settings.default_base_branch}'. No PR.\n---\n`;
+  } else if (settings.auto_merge_prs) {
+    workflowBlock =
+      `\n--- Workflow mode: AUTO-MERGE ---\n` +
+      `Open PR, wait for CI, merge with squash.\n---\n`;
+  } else {
+    workflowBlock =
+      `\n--- Workflow mode: PR-REVIEW (default) ---\n` +
+      `Open a DRAFT PR. Human reviews and merges.\n---\n`;
+  }
+
+  let attachmentBlock = "";
+  if (attachments.length > 0 && role === "dev_frontend") {
+    attachmentBlock =
+      `\n--- Approved prototypes (${attachments.length}) ---\n` +
+      `Your implementation MUST be 1:1 with these prototypes.\n\n` +
+      attachments
+        .map(
+          (a, i) =>
+            `### Prototype ${i + 1}: ${a.filename}\n\n\`\`\`html\n${a.content}\n\`\`\``
+        )
+        .join("\n\n") +
+      `\n---\n`;
+  }
+
+  return (
+    `IMPLEMENT this chunk for feature '${feature.slug}'.\n\n` +
+    `CHUNK: issue #${chunk.github_issue_number} — ${chunk.title}\n` +
+    `Skill: ${chunk.skill}\n\n` +
+    `STEPS (you MUST write actual code, not just plan):\n` +
+    `1. Clone the repo using the credentials below.\n` +
+    `2. Read the full issue #${chunk.github_issue_number} via GitHub API for scope and acceptance criteria.\n` +
+    `3. Read docs/features/${feature.slug}/prd.md, adr.md, acceptance-criteria.md and any prototypes.\n` +
+    `4. Create branch feat/${feature.slug}/${chunk.github_issue_number}-impl from ${settings.default_base_branch}.\n` +
+    `5. WRITE THE CODE that implements this chunk. Create/modify the actual source files in the repo.\n` +
+    `6. Run lint, typecheck and tests locally before committing.\n` +
+    `7. Commit with a clear message and push the branch.\n` +
+    `8. Open a DRAFT PR with body "Closes #${chunk.github_issue_number}". Add label status:in-review.\n` +
+    `9. End your turn with the PR URL and a summary of files changed.\n\n` +
+    `IMPORTANT: Stay strictly within the scope of issue #${chunk.github_issue_number}. ` +
+    `Do not implement other chunks. Disable git commit signing with -c commit.gpgsign=false. ` +
+    `Set a git identity before committing.` +
+    credBlock +
+    workflowBlock +
+    attachmentBlock
+  );
 }
 
 // ============================================================

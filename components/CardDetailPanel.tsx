@@ -374,43 +374,13 @@ export default function CardDetailPanel({
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            {/* Histórico de stages percorridas */}
-            {stageRuns && stageRuns.length > 0 && (
-              <Section title="histórico de execução">
-                <div className="space-y-1">
-                  {stageRuns.map((r: any) => (
-                    <div
-                      key={r.id}
-                      className="flex items-center gap-3 text-xs"
-                    >
-                      <span
-                        className={
-                          r.status === "completed"
-                            ? "text-qa"
-                            : r.status === "failed"
-                              ? "text-discovery"
-                              : "text-development"
-                        }
-                      >
-                        {r.status === "completed"
-                          ? "✓"
-                          : r.status === "failed"
-                            ? "✗"
-                            : "●"}
-                      </span>
-                      <span className="text-ink-100">{r.stage}</span>
-                      <span className="text-ink-400">·</span>
-                      <span className="text-ink-400">
-                        {r.agent_role ?? "?"}
-                      </span>
-                      <span className="text-ink-400 ml-auto">
-                        {new Date(r.started_at).toLocaleString()}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </Section>
-            )}
+            {/* Etapas com sessões e artefatos linkados */}
+            <StagesView
+              stageRuns={stageRuns ?? []}
+              artifacts={artifacts}
+              feature={feature}
+              onOpenFile={openFile}
+            />
 
             <Section title="contexto">
               <Field label="descrição" value={feature.description} multiline />
@@ -443,126 +413,6 @@ export default function CardDetailPanel({
               )}
             </Section>
 
-            {/* Artefatos gerados — file viewer */}
-            <Section title="artefatos gerados">
-              {artifacts.loading && (
-                <div className="text-xs text-ink-400">carregando do GitHub...</div>
-              )}
-              {artifacts.error && (
-                <div className="text-xs text-qa border border-qa/40 bg-qa/5 p-2 font-mono">
-                  {artifacts.error}
-                </div>
-              )}
-              {!artifacts.loading &&
-                artifacts.files.length === 0 &&
-                artifacts.chunks.length === 0 &&
-                artifacts.pulls.length === 0 && (
-                  <div className="text-xs text-ink-400 italic">
-                    {artifacts.message ?? "ainda sem artefatos no repositório"}
-                  </div>
-                )}
-
-              {/* Arquivos */}
-              {artifacts.files.length > 0 && (
-                <div className="mb-4">
-                  <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">
-                    documentos · branch{" "}
-                    <span className="font-mono text-ink-300">
-                      {artifacts.branch}
-                    </span>
-                  </div>
-                  <div className="space-y-1">
-                    {artifacts.files.map((f) => (
-                      <button
-                        key={f.path}
-                        onClick={() => openFile(f)}
-                        className="w-full flex items-center justify-between p-2 border border-ink-800 hover:border-ink-600 bg-ink-900/40 text-left transition-colors"
-                      >
-                        <div className="flex items-center gap-2 truncate">
-                          <FileIcon name={f.name} />
-                          <span className="text-sm text-ink-100 truncate">
-                            {f.path.replace(`docs/features/${feature.slug}/`, "")}
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-ink-400 shrink-0">
-                          {(f.size / 1024).toFixed(1)}kb
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Chunks (sub-issues) */}
-              {artifacts.chunks.length > 0 && (
-                <div className="mb-4">
-                  <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">
-                    chunks decompostos ({artifacts.chunks.length})
-                  </div>
-                  <div className="space-y-1">
-                    {artifacts.chunks.map((c) => (
-                      <a
-                        key={c.number}
-                        href={c.html_url}
-                        target="_blank"
-                        rel="noopener"
-                        className="flex items-center gap-2 p-2 border border-ink-800 hover:border-ink-600 bg-ink-900/40 transition-colors"
-                      >
-                        <span
-                          className={`text-[10px] uppercase px-1.5 py-0.5 border ${
-                            c.state === "closed"
-                              ? "text-qa border-qa/40"
-                              : "text-development border-development/40"
-                          }`}
-                        >
-                          {c.state}
-                        </span>
-                        <span className="text-sm text-ink-100 truncate flex-1">
-                          #{c.number} {c.title}
-                        </span>
-                        <span className="text-[10px] text-ink-400 shrink-0">↗</span>
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* PRs */}
-              {artifacts.pulls.length > 0 && (
-                <div>
-                  <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">
-                    pull requests ({artifacts.pulls.length})
-                  </div>
-                  <div className="space-y-1">
-                    {artifacts.pulls.map((pr) => (
-                      <a
-                        key={pr.number}
-                        href={pr.html_url}
-                        target="_blank"
-                        rel="noopener"
-                        className="flex items-center gap-2 p-2 border border-ink-800 hover:border-ink-600 bg-ink-900/40 transition-colors"
-                      >
-                        <span
-                          className={`text-[10px] uppercase px-1.5 py-0.5 border ${
-                            pr.state === "merged"
-                              ? "text-development border-development/40"
-                              : pr.state === "closed"
-                                ? "text-qa border-qa/40"
-                                : "text-planning border-planning/40"
-                          }`}
-                        >
-                          {pr.draft ? "draft" : pr.state}
-                        </span>
-                        <span className="text-sm text-ink-100 truncate flex-1">
-                          #{pr.number} {pr.title}
-                        </span>
-                        <span className="text-[10px] text-ink-400 shrink-0">↗</span>
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </Section>
 
             {card.claude_session_id && (
               <Section title="sessão claude (live)">
@@ -911,6 +761,266 @@ function FileIcon({ name }: { name: string }) {
             ? "💻"
             : "📎";
   return <span className="text-xs">{icon}</span>;
+}
+
+// ============================================================
+// StagesView: 4 etapas com sessões disparadas + artefatos por etapa
+// ============================================================
+const STAGE_META: {
+  code: string;
+  label: string;
+  color: string;
+  border: string;
+}[] = [
+  {
+    code: "discovery",
+    label: "Discovery",
+    color: "text-discovery",
+    border: "border-discovery",
+  },
+  {
+    code: "planning",
+    label: "Planejamento Técnico",
+    color: "text-planning",
+    border: "border-planning",
+  },
+  {
+    code: "development",
+    label: "Desenvolvimento",
+    color: "text-development",
+    border: "border-development",
+  },
+  { code: "qa", label: "Qualidade", color: "text-qa", border: "border-qa" },
+];
+
+function fileStage(name: string, path: string): string {
+  const n = name.toLowerCase();
+  const p = path.toLowerCase();
+  if (
+    n.includes("prd") ||
+    n.includes("acceptance") ||
+    n.includes("prototype") ||
+    p.includes("prototypes/")
+  )
+    return "discovery";
+  if (n.includes("adr")) return "planning";
+  if (
+    n.includes("test") ||
+    n.includes(".spec.") ||
+    p.includes("__tests__") ||
+    p.includes("/tests/")
+  )
+    return "qa";
+  return "development";
+}
+
+function StagesView({
+  stageRuns,
+  artifacts,
+  feature,
+  onOpenFile,
+}: {
+  stageRuns: any[];
+  artifacts: ArtifactsState;
+  feature: any;
+  onOpenFile: (f: ArtifactFile) => void;
+}) {
+  // Classifica artefatos por etapa
+  const filesByStage: Record<string, ArtifactFile[]> = {
+    discovery: [],
+    planning: [],
+    development: [],
+    qa: [],
+  };
+  for (const f of artifacts.files) {
+    const st = fileStage(f.name, f.path);
+    filesByStage[st].push(f);
+  }
+  // chunks → planning; pulls → development
+  const runsByStage: Record<string, any[]> = {
+    discovery: [],
+    planning: [],
+    development: [],
+    qa: [],
+  };
+  for (const r of stageRuns) {
+    if (runsByStage[r.stage]) runsByStage[r.stage].push(r);
+  }
+
+  return (
+    <section>
+      <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-3">
+        // etapas e artefatos
+      </div>
+      {artifacts.loading && (
+        <div className="text-xs text-ink-400 mb-2">
+          carregando artefatos do GitHub...
+        </div>
+      )}
+      <div className="space-y-3">
+        {STAGE_META.map((meta) => {
+          const runs = runsByStage[meta.code];
+          const files = filesByStage[meta.code];
+          const chunks = meta.code === "planning" ? artifacts.chunks : [];
+          const pulls = meta.code === "development" ? artifacts.pulls : [];
+          const hasContent =
+            runs.length > 0 ||
+            files.length > 0 ||
+            chunks.length > 0 ||
+            pulls.length > 0;
+
+          return (
+            <div
+              key={meta.code}
+              className={`border-l-2 ${meta.border} pl-3 py-1`}
+            >
+              <div
+                className={`text-xs uppercase tracking-widest ${meta.color} mb-2 flex items-center gap-2`}
+              >
+                {meta.label}
+                {runs.length > 0 && (
+                  <span className="text-ink-400 normal-case tracking-normal">
+                    · {runs.length} sessão{runs.length > 1 ? "es" : ""}
+                  </span>
+                )}
+              </div>
+
+              {!hasContent && (
+                <div className="text-[11px] text-ink-400 italic mb-1">
+                  nenhuma sessão ou artefato ainda
+                </div>
+              )}
+
+              {/* Sessões disparadas nesta etapa */}
+              {runs.length > 0 && (
+                <div className="space-y-1 mb-2">
+                  {runs.map((r) => (
+                    <div
+                      key={r.id}
+                      className="flex items-center gap-2 text-[11px]"
+                    >
+                      <span
+                        className={
+                          r.status === "completed"
+                            ? "text-qa"
+                            : r.status === "failed"
+                              ? "text-discovery"
+                              : "text-development"
+                        }
+                      >
+                        {r.status === "completed"
+                          ? "✓"
+                          : r.status === "failed"
+                            ? "✗"
+                            : "●"}
+                      </span>
+                      <span className="text-ink-300">{r.agent_role ?? "?"}</span>
+                      {r.summary && (
+                        <span className="text-ink-400 truncate max-w-[200px]">
+                          · {r.summary}
+                        </span>
+                      )}
+                      <span className="text-ink-500 ml-auto">
+                        {new Date(r.started_at).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Documentos */}
+              {files.length > 0 && (
+                <div className="space-y-1 mb-1">
+                  {files.map((f) => (
+                    <button
+                      key={f.path}
+                      onClick={() => onOpenFile(f)}
+                      className="w-full flex items-center justify-between p-1.5 border border-ink-800 hover:border-ink-600 bg-ink-900/40 text-left transition-colors"
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <FileIcon name={f.name} />
+                        <span className="text-xs text-ink-100 truncate">
+                          {f.path.replace(`docs/features/${feature.slug}/`, "")}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-ink-400 shrink-0">
+                        {(f.size / 1024).toFixed(1)}kb
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Chunks (planning) */}
+              {chunks.length > 0 && (
+                <div className="space-y-1 mb-1">
+                  {chunks.map((c) => (
+                    <a
+                      key={c.number}
+                      href={c.html_url}
+                      target="_blank"
+                      rel="noopener"
+                      className="flex items-center gap-2 p-1.5 border border-ink-800 hover:border-ink-600 bg-ink-900/40 transition-colors"
+                    >
+                      <span
+                        className={`text-[9px] uppercase px-1 py-0.5 border ${
+                          c.state === "closed"
+                            ? "text-qa border-qa/40"
+                            : "text-development border-development/40"
+                        }`}
+                      >
+                        {c.state}
+                      </span>
+                      <span className="text-xs text-ink-100 truncate flex-1">
+                        #{c.number} {c.title}
+                      </span>
+                      <span className="text-[10px] text-ink-400 shrink-0">↗</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+
+              {/* PRs (development) */}
+              {pulls.length > 0 && (
+                <div className="space-y-1">
+                  {pulls.map((pr) => (
+                    <a
+                      key={pr.number}
+                      href={pr.html_url}
+                      target="_blank"
+                      rel="noopener"
+                      className="flex items-center gap-2 p-1.5 border border-ink-800 hover:border-ink-600 bg-ink-900/40 transition-colors"
+                    >
+                      <span
+                        className={`text-[9px] uppercase px-1 py-0.5 border ${
+                          pr.state === "merged"
+                            ? "text-development border-development/40"
+                            : pr.state === "closed"
+                              ? "text-qa border-qa/40"
+                              : "text-planning border-planning/40"
+                        }`}
+                      >
+                        {pr.draft ? "draft" : pr.state}
+                      </span>
+                      <span className="text-xs text-ink-100 truncate flex-1">
+                        #{pr.number} {pr.title}
+                      </span>
+                      <span className="text-[10px] text-ink-400 shrink-0">↗</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {artifacts.error && (
+        <div className="text-[11px] text-qa border border-qa/40 bg-qa/5 p-2 font-mono mt-2">
+          {artifacts.error}
+        </div>
+      )}
+    </section>
+  );
 }
 
 function Section({

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { beta, verifyWebhook } from "@/lib/claude";
 import { createServiceClient } from "@/lib/supabase/server";
+import { handleChunkSessionIdle } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -53,6 +54,34 @@ export async function POST(req: Request) {
 
 async function handleSessionIdled(sessionId: string) {
   const sb = createServiceClient();
+
+  // Primeiro: é uma sessão de chunk (development)? Se sim, o orquestrador
+  // marca o chunk done e dispara o próximo (ou finaliza a stage). Não cria
+  // gate por chunk — só quando todos terminam.
+  const wasChunk = await handleChunkSessionIdle(sessionId);
+  if (wasChunk) {
+    // Persiste o resumo do chunk no chat history pra visibilidade
+    try {
+      const session = await beta.sessions.retrieve(sessionId);
+      const summary = extractSummary(session);
+      const { data: chunkCard } = await sb
+        .from("cards")
+        .select("id")
+        .eq("claude_session_id", sessionId)
+        .single();
+      if (summary && chunkCard) {
+        await sb.from("card_chat_messages").insert({
+          card_id: chunkCard.id,
+          session_id: sessionId,
+          role: "agent",
+          content: summary,
+        });
+      }
+    } catch (e) {
+      console.error("[webhook] chunk summary persist failed", e);
+    }
+    return;
+  }
 
   const { data: card } = await sb
     .from("cards")
