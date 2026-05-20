@@ -50,6 +50,11 @@ export default function TransitionDialog({
     setConfirming(true);
     setError("");
 
+    // Pega o gate id pra essa decision
+    const detailRes = await fetch(`/api/cards/${cardId}/chat`); // só pra acordar o cookie auth
+    void detailRes;
+
+    // Busca o gate id direto via supabase no client
     const { createClient } = await import("@/lib/supabase/client");
     const sb = createClient();
     const { data: card } = await sb
@@ -82,11 +87,6 @@ export default function TransitionDialog({
       setConfirming(false);
     }
   }
-
-  // Helper: trunca agent_id de forma type-safe
-  const agentIdDisplay = preview?.agent_id
-    ? preview.agent_id.slice(0, 20) + "..."
-    : "?";
 
   return (
     <div className="fixed inset-0 bg-ink-950/90 flex items-center justify-center p-4 z-[60]">
@@ -131,7 +131,11 @@ export default function TransitionDialog({
                   <div className="grid grid-cols-3 gap-3 text-xs">
                     <Stat label="agente" value={preview.agent_name ?? "?"} />
                     <Stat label="modelo" value={preview.model ?? "?"} />
-                    <Stat label="agent id" value={agentIdDisplay} mono />
+                    <Stat
+                      label="agent id"
+                      value={preview.agent_id?.slice(0, 20) + "..." ?? "?"}
+                      mono
+                    />
                   </div>
 
                   <div>
