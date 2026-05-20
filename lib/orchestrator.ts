@@ -493,6 +493,288 @@ export async function completeCardEarly(
 }
 
 // ============================================================
+// moveCardToStage: move o card pra QUALQUER stage (frente ou trás)
+// Ex: voltar de development pra planning ("Refinamento Técnico")
+// ============================================================
+const ALL_STAGES: StageCode[] = [
+  "discovery",
+  "planning",
+  "development",
+  "qa",
+  "done",
+];
+
+export async function moveCardToStage(
+  cardId: string,
+  targetStage: StageCode,
+  dispatch: boolean = true
+): Promise<void> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error("card not found");
+  if (!ALL_STAGES.includes(targetStage)) {
+    throw new Error(`stage inválida: ${targetStage}`);
+  }
+
+  // Fecha gates abertos do card
+  await sb
+    .from("human_gates")
+    .update({
+      decision: "rejected",
+      decision_reason: `movido manualmente para ${targetStage}`,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("card_id", cardId)
+    .is("decision", null);
+
+  // Marca runs em andamento como interrompidas
+  await sb
+    .from("card_stage_runs")
+    .update({ status: "failed", ended_at: new Date().toISOString() })
+    .eq("card_id", cardId)
+    .eq("status", "running");
+
+  // Atualiza features.current_stage
+  await sb
+    .from("features")
+    .update({ current_stage: targetStage })
+    .eq("id", card.feature_id);
+
+  if (targetStage === "done") {
+    await sb
+      .from("cards")
+      .update({ stage: "done", status: "done", claude_session_id: null })
+      .eq("id", cardId);
+    return;
+  }
+
+  // Move o card
+  await sb
+    .from("cards")
+    .update({
+      stage: targetStage,
+      status: dispatch ? "queued" : "awaiting_review",
+      claude_session_id: null,
+    })
+    .eq("id", cardId);
+
+  if (dispatch) {
+    if (targetStage === "development") {
+      await startDevelopmentStage(cardId);
+    } else {
+      await startStage(cardId);
+    }
+  }
+}
+
+// ============================================================
+// rerunStage: descarta o processamento da stage atual e refaz já
+// ============================================================
+export async function rerunStage(cardId: string): Promise<void> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*, feature:features(id)")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error("card not found");
+
+  const stage = card.stage as StageCode;
+
+  // Fecha gates abertos
+  await sb
+    .from("human_gates")
+    .update({
+      decision: "rejected",
+      decision_reason: "re-execução do estágio solicitada",
+      decided_at: new Date().toISOString(),
+    })
+    .eq("card_id", cardId)
+    .is("decision", null);
+
+  // Marca todas as runs dessa stage como descartadas
+  await sb
+    .from("card_stage_runs")
+    .update({ status: "failed", ended_at: new Date().toISOString() })
+    .eq("card_id", cardId)
+    .eq("stage", stage);
+
+  // Se for development, reseta os chunks pra planned (refaz tudo)
+  if (stage === "development") {
+    await sb
+      .from("chunks")
+      .update({ status: "planned" })
+      .eq("feature_id", card.feature.id);
+  }
+
+  // Limpa sessão e re-dispara
+  await sb
+    .from("cards")
+    .update({ status: "queued", claude_session_id: null })
+    .eq("id", cardId);
+
+  if (stage === "development") {
+    await startDevelopmentStage(cardId);
+  } else {
+    await startStage(cardId);
+  }
+}
+
+// ============================================================
+// forceSyncSession: consulta o status real da sessão e destrava
+// cards presos (sessão idle/ended mas card ainda "running")
+// ============================================================
+export async function forceSyncSession(cardId: string): Promise<{
+  card_status: string;
+  session_status: string;
+  action: string;
+}> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error("card not found");
+
+  if (!card.claude_session_id) {
+    return {
+      card_status: card.status,
+      session_status: "none",
+      action: "card sem sessão ativa — nada a sincronizar",
+    };
+  }
+
+  // Consulta o status real da sessão
+  let session: any = null;
+  try {
+    session = await beta.sessions.retrieve(card.claude_session_id);
+  } catch (e) {
+    return {
+      card_status: card.status,
+      session_status: "error",
+      action: `falha ao consultar sessão: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    };
+  }
+
+  const rawStatus = String(session?.status ?? "unknown").toLowerCase();
+  const isActive =
+    rawStatus.includes("running") ||
+    rawStatus.includes("pending") ||
+    rawStatus.includes("starting") ||
+    rawStatus.includes("progress");
+
+  if (isActive) {
+    return {
+      card_status: card.status,
+      session_status: rawStatus,
+      action: "sessão ainda ativa — aguarde ou re-execute se travada",
+    };
+  }
+
+  // Sessão terminou (idle/ended/completed/failed) mas card pode estar preso
+  if (card.status !== "running") {
+    return {
+      card_status: card.status,
+      session_status: rawStatus,
+      action: "card já não estava em running — nenhuma ação necessária",
+    };
+  }
+
+  // É uma sessão de chunk? Avança o pipeline de development
+  const wasChunk = await handleChunkSessionIdle(card.claude_session_id);
+  if (wasChunk) {
+    return {
+      card_status: "running",
+      session_status: rawStatus,
+      action: "chunk finalizado — próximo chunk disparado (ou stage concluída)",
+    };
+  }
+
+  // Stage normal: força transição pra awaiting_review
+  const summary = extractSessionSummary(session);
+  await moveToAwaitingReview(cardId, card.stage, summary);
+
+  return {
+    card_status: "awaiting_review",
+    session_status: rawStatus,
+    action: "card destravado → aguardando revisão",
+  };
+}
+
+// Move um card pra awaiting_review criando/atualizando o gate (reutilizável)
+async function moveToAwaitingReview(
+  cardId: string,
+  stage: string,
+  summary: string
+): Promise<void> {
+  const sb = createServiceClient();
+  const roleForStage: Record<string, string> = {
+    discovery: "pm",
+    planning: "tech_lead",
+    development: "tech_lead",
+    qa: "qa",
+  };
+  const role = roleForStage[stage] ?? "admin";
+
+  const { data: assignee } = await sb
+    .from("user_profiles")
+    .select("id")
+    .eq("role", role)
+    .limit(1)
+    .single();
+
+  await sb
+    .from("card_stage_runs")
+    .update({ summary })
+    .eq("card_id", cardId)
+    .eq("status", "running");
+
+  await sb.from("cards").update({ status: "awaiting_review" }).eq("id", cardId);
+
+  const { data: existingGate } = await sb
+    .from("human_gates")
+    .select("id")
+    .eq("card_id", cardId)
+    .is("decision", null)
+    .single();
+
+  if (!existingGate) {
+    await sb.from("human_gates").insert({
+      card_id: cardId,
+      assignee_id: assignee?.id ?? null,
+      summary,
+      artifacts_json: [],
+    });
+  } else {
+    await sb
+      .from("human_gates")
+      .update({ summary })
+      .eq("id", existingGate.id);
+  }
+}
+
+function extractSessionSummary(session: any): string {
+  if (!session) return "(sem dados da sessão)";
+  const messages = session?.messages ?? session?.events ?? [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant" && m.type !== "agent.message") continue;
+    if (typeof m.content === "string") return m.content;
+    for (const block of m.content ?? []) {
+      if (block.type === "text") return block.text;
+    }
+  }
+  return "(agente concluiu o turno)";
+}
+
+// ============================================================
 // createFeature
 // ============================================================
 export async function createFeature(input: {

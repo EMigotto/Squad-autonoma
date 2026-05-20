@@ -333,6 +333,76 @@ export default function CardDetailPanel({
     }
   }
 
+  async function handleSync() {
+    setActionLoading(true);
+    try {
+      const res = await fetch(`/api/cards/${cardId}/sync`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        alert("erro: " + (data.error ?? res.status));
+      } else {
+        alert(
+          `status da sessão: ${data.session_status}\nação: ${data.action}`
+        );
+        await loadDetail();
+        if (data.card_status === "awaiting_review") {
+          window.location.reload();
+        }
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleRerun() {
+    if (
+      !confirm(
+        "Re-executar este estágio? Todo o processamento atual será descartado e o agente recomeça imediatamente."
+      )
+    )
+      return;
+    setActionLoading(true);
+    const res = await fetch(`/api/cards/${cardId}/rerun`, { method: "POST" });
+    if (res.ok) {
+      onClose();
+      window.location.reload();
+    } else {
+      const j = await res.json().catch(() => ({}));
+      alert("erro: " + (j.error ?? res.status));
+      setActionLoading(false);
+    }
+  }
+
+  async function handleMove(targetStage: string) {
+    const labels: Record<string, string> = {
+      discovery: "Discovery",
+      planning: "Planejamento Técnico",
+      development: "Desenvolvimento",
+      qa: "Qualidade",
+    };
+    if (
+      !confirm(
+        `Mover este card para "${labels[targetStage] ?? targetStage}"? ` +
+          `O agente dessa etapa será disparado novamente.`
+      )
+    )
+      return;
+    setActionLoading(true);
+    const res = await fetch(`/api/cards/${cardId}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage: targetStage, dispatch: true }),
+    });
+    if (res.ok) {
+      onClose();
+      window.location.reload();
+    } else {
+      const j = await res.json().catch(() => ({}));
+      alert("erro: " + (j.error ?? res.status));
+      setActionLoading(false);
+    }
+  }
+
   if (!detail) {
     return (
       <div className="fixed inset-0 bg-ink-950/80 flex items-center justify-center z-50">
@@ -432,6 +502,16 @@ export default function CardDetailPanel({
                     Console ↗
                   </a>
                 </div>
+
+                {/* Diagnóstico: card preso */}
+                <SessionHealth
+                  cardStatus={card.status}
+                  sessionStatus={session.status}
+                  onSync={handleSync}
+                  onRerun={handleRerun}
+                  loading={actionLoading}
+                />
+
                 {session.error && (
                   <div className="text-xs text-qa border border-qa/40 bg-qa/5 p-2 font-mono mb-2">
                     {session.error}
@@ -532,6 +612,13 @@ export default function CardDetailPanel({
                     </button>
                   )}
                   <button
+                    onClick={handleRerun}
+                    disabled={actionLoading}
+                    className="border border-development text-development px-3 py-1.5 text-sm hover:bg-development/10 disabled:opacity-50"
+                  >
+                    ↻ re-executar etapa
+                  </button>
+                  <button
                     onClick={handleCompleteEarly}
                     disabled={actionLoading}
                     className="border border-done text-done px-3 py-1.5 text-sm hover:bg-done/10 disabled:opacity-50 ml-auto"
@@ -545,6 +632,39 @@ export default function CardDetailPanel({
                   >
                     cancelar feature
                   </button>
+                </div>
+
+                {/* Mover para etapa (frente ou trás) */}
+                <div className="mt-3 pt-3 border-t border-ink-800">
+                  <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
+                    mover para etapa
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { code: "discovery", label: "Discovery" },
+                      { code: "planning", label: "Planejamento Técnico" },
+                      { code: "development", label: "Desenvolvimento" },
+                      { code: "qa", label: "Qualidade" },
+                    ].map((s) => (
+                      <button
+                        key={s.code}
+                        onClick={() => handleMove(s.code)}
+                        disabled={actionLoading || card.stage === s.code}
+                        className={`px-2.5 py-1 text-xs border transition-colors disabled:opacity-40 ${
+                          card.stage === s.code
+                            ? "border-ink-600 text-ink-400 cursor-default"
+                            : "border-ink-700 text-ink-200 hover:border-ink-500 hover:text-ink-100"
+                        }`}
+                      >
+                        {card.stage === s.code ? `● ${s.label}` : s.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[10px] text-ink-400 mt-1">
+                    útil pra voltar uma etapa (ex: de Desenvolvimento para
+                    Planejamento) quando algo precisa ser refinado. Dispara o
+                    agente da etapa escolhida.
+                  </div>
                 </div>
               </Section>
             )}
@@ -1059,6 +1179,91 @@ function Field({
       >
         {value || <span className="text-ink-400">—</span>}
       </div>
+    </div>
+  );
+}
+
+// Agrupa o status da sessão e propõe ações de destravamento
+function SessionHealth({
+  cardStatus,
+  sessionStatus,
+  onSync,
+  onRerun,
+  loading,
+}: {
+  cardStatus: string;
+  sessionStatus: string;
+  onSync: () => void;
+  onRerun: () => void;
+  loading: boolean;
+}) {
+  const s = (sessionStatus ?? "unknown").toLowerCase();
+  const isActive =
+    s.includes("running") ||
+    s.includes("pending") ||
+    s.includes("starting") ||
+    s.includes("progress");
+  const isIdle = s.includes("idle");
+  const isError = s.includes("error") || s.includes("fail");
+
+  // Card preso: status running mas sessão já parou (idle/ended/error)
+  const isStuck = cardStatus === "running" && !isActive;
+
+  if (isActive) {
+    return (
+      <div className="border border-development/30 bg-development/5 p-2 mb-2 text-[11px] text-ink-300">
+        <span className="text-development">● sessão ativa</span> — o agente está
+        trabalhando. Aguarde a conclusão.
+      </div>
+    );
+  }
+
+  if (isStuck) {
+    return (
+      <div className="border border-planning/40 bg-planning/10 p-3 mb-2">
+        <div className="text-xs text-planning font-semibold mb-1">
+          ⚠ card possivelmente preso
+        </div>
+        <div className="text-[11px] text-ink-300 mb-2 leading-relaxed">
+          A sessão está{" "}
+          <span className="font-mono">
+            {isIdle ? "ociosa (idle)" : isError ? "com erro" : s}
+          </span>{" "}
+          mas o card continua em <span className="font-mono">running</span>.
+          Isso acontece quando o webhook do Anthropic não chegou. Escolha uma
+          ação:
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={onSync}
+            disabled={loading}
+            className="bg-planning text-ink-950 px-2.5 py-1 text-xs font-semibold hover:bg-planning/80 disabled:opacity-50"
+          >
+            destravar (marcar pronto p/ revisão)
+          </button>
+          <button
+            onClick={onRerun}
+            disabled={loading}
+            className="border border-development text-development px-2.5 py-1 text-xs hover:bg-development/10 disabled:opacity-50"
+          >
+            ↻ re-executar etapa
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Não está preso — só mostra um sync discreto
+  return (
+    <div className="flex items-center gap-2 mb-2 text-[11px] text-ink-400">
+      <span>status agrupado: {isIdle ? "ocioso" : isError ? "erro" : s}</span>
+      <button
+        onClick={onSync}
+        disabled={loading}
+        className="ml-auto text-development hover:underline disabled:opacity-50"
+      >
+        sincronizar status
+      </button>
     </div>
   );
 }
