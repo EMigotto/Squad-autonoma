@@ -33,8 +33,27 @@ interface ArtifactFile {
   size: number;
 }
 
+interface ChunkIssue {
+  number: number;
+  title: string;
+  state: string;
+  labels: string[];
+  html_url: string;
+}
+
+interface PullRequest {
+  number: number;
+  title: string;
+  state: string;
+  draft?: boolean;
+  head?: string;
+  html_url: string;
+}
+
 interface ArtifactsState {
   files: ArtifactFile[];
+  chunks: ChunkIssue[];
+  pulls: PullRequest[];
   branch?: string;
   branches_available?: string[];
   message?: string;
@@ -62,6 +81,8 @@ export default function CardDetailPanel({
   const [actionLoading, setActionLoading] = useState(false);
   const [artifacts, setArtifacts] = useState<ArtifactsState>({
     files: [],
+    chunks: [],
+    pulls: [],
     loading: true,
   });
   const [openArtifact, setOpenArtifact] = useState<{
@@ -100,11 +121,19 @@ export default function CardDetailPanel({
       .select("*")
       .eq("feature_id", card.feature.id);
 
-    // Pega stage runs também
+    // Busca TODOS os cards desta feature (pode haver órfãos antigos) e pega
+    // as stage_runs de todos — assim o histórico fica unificado por feature,
+    // mostrando todas as sessões disparadas em todas as raias.
+    const { data: featureCards } = await sb
+      .from("cards")
+      .select("id")
+      .eq("feature_id", card.feature.id);
+    const cardIds = (featureCards ?? []).map((c) => c.id);
+
     const { data: stageRuns } = await sb
       .from("card_stage_runs")
       .select("*")
-      .eq("card_id", cardId)
+      .in("card_id", cardIds.length ? cardIds : [cardId])
       .order("started_at", { ascending: true });
 
     setDetail({
@@ -131,6 +160,8 @@ export default function CardDetailPanel({
       const data = await res.json();
       setArtifacts({
         files: data.files ?? [],
+        chunks: data.chunks ?? [],
+        pulls: data.pulls ?? [],
         branch: data.branch,
         branches_available: data.branches_available,
         message: data.message,
@@ -140,6 +171,8 @@ export default function CardDetailPanel({
     } catch (e) {
       setArtifacts({
         files: [],
+        chunks: [],
+        pulls: [],
         loading: false,
         error: String(e),
       });
@@ -420,15 +453,23 @@ export default function CardDetailPanel({
                   {artifacts.error}
                 </div>
               )}
-              {!artifacts.loading && artifacts.files.length === 0 && (
-                <div className="text-xs text-ink-400 italic">
-                  {artifacts.message ?? "ainda sem arquivos no repositório"}
-                </div>
-              )}
+              {!artifacts.loading &&
+                artifacts.files.length === 0 &&
+                artifacts.chunks.length === 0 &&
+                artifacts.pulls.length === 0 && (
+                  <div className="text-xs text-ink-400 italic">
+                    {artifacts.message ?? "ainda sem artefatos no repositório"}
+                  </div>
+                )}
+
+              {/* Arquivos */}
               {artifacts.files.length > 0 && (
-                <>
-                  <div className="text-[11px] text-ink-400 mb-2">
-                    branch: <span className="font-mono text-ink-300">{artifacts.branch}</span>
+                <div className="mb-4">
+                  <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+                    documentos · branch{" "}
+                    <span className="font-mono text-ink-300">
+                      {artifacts.branch}
+                    </span>
                   </div>
                   <div className="space-y-1">
                     {artifacts.files.map((f) => (
@@ -449,7 +490,77 @@ export default function CardDetailPanel({
                       </button>
                     ))}
                   </div>
-                </>
+                </div>
+              )}
+
+              {/* Chunks (sub-issues) */}
+              {artifacts.chunks.length > 0 && (
+                <div className="mb-4">
+                  <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+                    chunks decompostos ({artifacts.chunks.length})
+                  </div>
+                  <div className="space-y-1">
+                    {artifacts.chunks.map((c) => (
+                      <a
+                        key={c.number}
+                        href={c.html_url}
+                        target="_blank"
+                        rel="noopener"
+                        className="flex items-center gap-2 p-2 border border-ink-800 hover:border-ink-600 bg-ink-900/40 transition-colors"
+                      >
+                        <span
+                          className={`text-[10px] uppercase px-1.5 py-0.5 border ${
+                            c.state === "closed"
+                              ? "text-qa border-qa/40"
+                              : "text-development border-development/40"
+                          }`}
+                        >
+                          {c.state}
+                        </span>
+                        <span className="text-sm text-ink-100 truncate flex-1">
+                          #{c.number} {c.title}
+                        </span>
+                        <span className="text-[10px] text-ink-400 shrink-0">↗</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* PRs */}
+              {artifacts.pulls.length > 0 && (
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+                    pull requests ({artifacts.pulls.length})
+                  </div>
+                  <div className="space-y-1">
+                    {artifacts.pulls.map((pr) => (
+                      <a
+                        key={pr.number}
+                        href={pr.html_url}
+                        target="_blank"
+                        rel="noopener"
+                        className="flex items-center gap-2 p-2 border border-ink-800 hover:border-ink-600 bg-ink-900/40 transition-colors"
+                      >
+                        <span
+                          className={`text-[10px] uppercase px-1.5 py-0.5 border ${
+                            pr.state === "merged"
+                              ? "text-development border-development/40"
+                              : pr.state === "closed"
+                                ? "text-qa border-qa/40"
+                                : "text-planning border-planning/40"
+                          }`}
+                        >
+                          {pr.draft ? "draft" : pr.state}
+                        </span>
+                        <span className="text-sm text-ink-100 truncate flex-1">
+                          #{pr.number} {pr.title}
+                        </span>
+                        <span className="text-[10px] text-ink-400 shrink-0">↗</span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
               )}
             </Section>
 

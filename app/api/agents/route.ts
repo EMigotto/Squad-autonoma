@@ -46,7 +46,51 @@ export async function GET() {
       deployedMap.get(def.role)!.hash !== hashPrompt(def.system_prompt),
   }));
 
-  return NextResponse.json({ agents: enriched });
+  // Lista os agents que existem de fato no Claude Console.
+  // Mapeia cada um para a definition/stage local quando possível.
+  let consoleAgents: Array<{
+    id: string;
+    name: string;
+    model?: string;
+    version?: number;
+    mapped_role: string | null;
+    mapped_stage: string | null;
+  }> = [];
+  let consoleError: string | null = null;
+
+  try {
+    const idToRole = new Map(
+      (deployed ?? []).map((d) => [d.claude_agent_id, d.role])
+    );
+    const roleToStage = new Map(
+      (definitions ?? []).map((d) => [d.role, d.stage])
+    );
+
+    // beta.agents.list() — pode paginar; pegamos a primeira página (suficiente)
+    const list = await beta.agents.list({ limit: 100 });
+    const items = list?.data ?? list?.agents ?? [];
+    consoleAgents = items.map((a: any) => {
+      const role = idToRole.get(a.id) ?? null;
+      return {
+        id: a.id,
+        name: a.name ?? "(sem nome)",
+        model:
+          typeof a.model === "string" ? a.model : a.model?.id ?? undefined,
+        version: a.version,
+        mapped_role: role,
+        mapped_stage: role ? roleToStage.get(role) ?? null : null,
+      };
+    });
+  } catch (e) {
+    consoleError = e instanceof Error ? e.message : String(e);
+  }
+
+  return NextResponse.json({
+    agents: enriched,
+    console_agents: consoleAgents,
+    console_error: consoleError,
+    needs_seed: (definitions ?? []).length === 0,
+  });
 }
 
 export async function POST(req: Request) {

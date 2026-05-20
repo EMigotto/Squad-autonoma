@@ -91,6 +91,14 @@ async function handleSessionIdled(sessionId: string) {
   // Card só vai pra awaiting_review se ainda estiver running
   // (chat refining mantém running → idle → running ciclicamente)
   if (card.status === "running") {
+    // Atualiza o summary da stage_run atual (status vira completed/failed só
+    // quando o humano decide, em advanceCard).
+    await sb
+      .from("card_stage_runs")
+      .update({ summary })
+      .eq("claude_session_id", sessionId)
+      .eq("status", "running");
+
     const role = roleForStage(card.stage);
     const { data: assignee } = await sb
       .from("user_profiles")

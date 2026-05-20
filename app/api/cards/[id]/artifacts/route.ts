@@ -46,36 +46,112 @@ export async function GET(
     }
 
     const branches = await tryBranches(repo, slug, token);
-    if (!branches.length) {
-      return NextResponse.json({
-        files: [],
-        branches_tried: ["main", `feat/${slug}/spec`],
-        message: "nenhuma branch com docs/features/" + slug + "/ encontrada",
-      });
+
+    // Arquivos no branch (prd.md, adr.md, acceptance-criteria.md, prototypes)
+    let files: Array<{ name: string; path: string; type: string; size: number }> =
+      [];
+    let primary: string | undefined;
+    if (branches.length) {
+      primary = branches[0];
+      files = await listFilesRecursive(
+        repo,
+        `docs/features/${slug}`,
+        primary,
+        token
+      );
     }
 
-    // Usa a primeira branch encontrada
-    const primary = branches[0];
-    const files = await listFilesRecursive(
-      repo,
-      `docs/features/${slug}`,
-      primary,
-      token
-    );
+    // Chunks = sub-issues com label feat:<slug>
+    const chunks = await listIssues(repo, slug, token);
+
+    // PRs relacionados à feature (branch contém o slug)
+    const pulls = await listPulls(repo, slug, token);
 
     return NextResponse.json({
       files,
       branch: primary,
       branches_available: branches,
+      chunks,
+      pulls,
+      message: branches.length
+        ? undefined
+        : "nenhuma branch com docs/features/" + slug + "/ encontrada ainda",
     });
   } catch (e) {
     return NextResponse.json(
       {
         error: e instanceof Error ? e.message : String(e),
         files: [],
+        chunks: [],
+        pulls: [],
       },
       { status: 200 }
     );
+  }
+}
+
+// Lista issues (chunks) com label feat:<slug>
+async function listIssues(repo: string, slug: string, token: string) {
+  try {
+    const url = `https://api.github.com/repos/${repo}/issues?state=all&labels=feat:${encodeURIComponent(
+      slug
+    )}&per_page=50`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!res.ok) return [];
+    const items = await res.json();
+    if (!Array.isArray(items)) return [];
+    // Filtra PRs (a API de issues retorna PRs também)
+    return items
+      .filter((it: any) => !it.pull_request)
+      .map((it: any) => ({
+        number: it.number,
+        title: it.title,
+        state: it.state,
+        labels: (it.labels ?? []).map((l: any) =>
+          typeof l === "string" ? l : l.name
+        ),
+        html_url: it.html_url,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// Lista PRs cujo branch (head) contém o slug
+async function listPulls(repo: string, slug: string, token: string) {
+  try {
+    const url = `https://api.github.com/repos/${repo}/pulls?state=all&per_page=50`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!res.ok) return [];
+    const items = await res.json();
+    if (!Array.isArray(items)) return [];
+    const norm = slug.toLowerCase();
+    return items
+      .filter((pr: any) => {
+        const ref = (pr.head?.ref ?? "").toLowerCase();
+        const title = (pr.title ?? "").toLowerCase();
+        return ref.includes(norm) || title.includes(norm);
+      })
+      .map((pr: any) => ({
+        number: pr.number,
+        title: pr.title,
+        state: pr.merged_at ? "merged" : pr.state,
+        draft: pr.draft,
+        head: pr.head?.ref,
+        html_url: pr.html_url,
+      }));
+  } catch {
+    return [];
   }
 }
 

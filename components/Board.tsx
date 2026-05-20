@@ -91,15 +91,51 @@ export default function Board({
     }
   }, []);
 
-  // Separa cards cancelled dos outros
-  const activeCards = useMemo(
-    () => cards.filter((c) => c.status !== "cancelled"),
-    [cards]
-  );
-  const cancelledCards = useMemo(
-    () => cards.filter((c) => c.status === "cancelled"),
-    [cards]
-  );
+  // Dedup por feature: cada feature deve aparecer UMA vez, no stage mais
+  // avançado. Cards órfãos (criados pela versão antiga que duplicava) são
+  // colapsados aqui. Se o card mais avançado está cancelled, a feature inteira
+  // conta como cancelada.
+  const STAGE_RANK: Record<string, number> = {
+    discovery: 0,
+    planning: 1,
+    development: 2,
+    qa: 3,
+    done: 4,
+  };
+
+  const { canonicalActive, cancelledFeatures } = useMemo(() => {
+    const byFeature = new Map<string, any[]>();
+    for (const c of cards) {
+      const fid = c.feature?.id ?? c.feature_id ?? c.id;
+      if (!byFeature.has(fid)) byFeature.set(fid, []);
+      byFeature.get(fid)!.push(c);
+    }
+
+    const active: any[] = [];
+    const cancelled: any[] = [];
+
+    for (const [, group] of byFeature) {
+      const nonCancelled = group.filter((c) => c.status !== "cancelled");
+      if (nonCancelled.length === 0) {
+        // feature totalmente cancelada — pega o card mais avançado pra exibir
+        const top = group.sort(
+          (a, b) => (STAGE_RANK[b.stage] ?? 0) - (STAGE_RANK[a.stage] ?? 0)
+        )[0];
+        cancelled.push(top);
+        continue;
+      }
+      // card canônico = stage mais avançado entre os não cancelados
+      const canonical = nonCancelled.sort(
+        (a, b) => (STAGE_RANK[b.stage] ?? 0) - (STAGE_RANK[a.stage] ?? 0)
+      )[0];
+      active.push(canonical);
+    }
+
+    return { canonicalActive: active, cancelledFeatures: cancelled };
+  }, [cards]);
+
+  const activeCards = canonicalActive;
+  const cancelledCards = cancelledFeatures;
 
   const cardsByStage = useMemo(() => {
     const acc: Record<string, any[]> = {};

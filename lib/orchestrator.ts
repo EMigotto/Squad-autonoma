@@ -402,27 +402,43 @@ export async function cancelCard(
     .single();
   if (!card) throw new Error("card not found");
 
-  await sb.from("cards").update({ status: "cancelled" }).eq("id", cardId);
+  const featureId = card.feature.id;
+
+  // Cancela TODOS os cards desta feature (pode haver mais de um por causa
+  // de cards órfãos criados pela versão antiga do orquestrador).
+  const { data: allCards } = await sb
+    .from("cards")
+    .select("id")
+    .eq("feature_id", featureId);
+  const cardIds = (allCards ?? []).map((c) => c.id);
 
   await sb
-    .from("human_gates")
-    .update({
-      decision: "rejected",
-      decision_reason: `cancelado: ${reason}`,
-      decided_by: cancelledBy,
-      decided_at: new Date().toISOString(),
-    })
-    .eq("card_id", cardId)
-    .is("decision", null);
+    .from("cards")
+    .update({ status: "cancelled" })
+    .eq("feature_id", featureId);
 
-  await sb
-    .from("card_stage_runs")
-    .update({
-      status: "failed",
-      ended_at: new Date().toISOString(),
-    })
-    .eq("card_id", cardId)
-    .eq("status", "running");
+  // Fecha todos os gates abertos de todos os cards da feature
+  if (cardIds.length > 0) {
+    await sb
+      .from("human_gates")
+      .update({
+        decision: "rejected",
+        decision_reason: `cancelado: ${reason}`,
+        decided_by: cancelledBy,
+        decided_at: new Date().toISOString(),
+      })
+      .in("card_id", cardIds)
+      .is("decision", null);
+
+    await sb
+      .from("card_stage_runs")
+      .update({
+        status: "failed",
+        ended_at: new Date().toISOString(),
+      })
+      .in("card_id", cardIds)
+      .eq("status", "running");
+  }
 
   await sb
     .from("features")
@@ -430,7 +446,7 @@ export async function cancelCard(
       cancelled_at: new Date().toISOString(),
       cancelled_reason: reason,
     })
-    .eq("id", card.feature.id);
+    .eq("id", featureId);
 }
 
 export async function completeCardEarly(

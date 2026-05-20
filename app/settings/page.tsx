@@ -75,6 +75,10 @@ export default function SettingsPage() {
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [showAgentEditor, setShowAgentEditor] = useState(false);
   const [creatingNew, setCreatingNew] = useState(false);
+  const [consoleAgents, setConsoleAgents] = useState<any[]>([]);
+  const [consoleError, setConsoleError] = useState<string | null>(null);
+  const [needsSeed, setNeedsSeed] = useState(false);
+  const [seeding, setSeeding] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -84,6 +88,10 @@ export default function SettingsPage() {
       .then(([settingsData, agentsData]) => {
         if (settingsData.settings) setSettings(settingsData.settings);
         if (agentsData.agents) setAgents(agentsData.agents);
+        if (agentsData.console_agents)
+          setConsoleAgents(agentsData.console_agents);
+        setConsoleError(agentsData.console_error ?? null);
+        setNeedsSeed(!!agentsData.needs_seed);
         setLoading(false);
       })
       .catch((e) => {
@@ -91,6 +99,30 @@ export default function SettingsPage() {
         setLoading(false);
       });
   }, []);
+
+  async function runSeed() {
+    const secret = prompt(
+      "para rodar o setup (seed + deploy), informe o ADMIN_SECRET:"
+    );
+    if (!secret) return;
+    setSeeding(true);
+    try {
+      const res = await fetch("/api/admin/setup-agents", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${secret}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert("erro: " + (data.error ?? res.status));
+      } else {
+        await reloadAgents();
+      }
+    } catch (e) {
+      alert("erro: " + String(e));
+    } finally {
+      setSeeding(false);
+    }
+  }
 
   async function saveSettings() {
     setSaving(true);
@@ -119,6 +151,9 @@ export default function SettingsPage() {
     const res = await fetch("/api/agents");
     const data = await res.json();
     if (data.agents) setAgents(data.agents);
+    if (data.console_agents) setConsoleAgents(data.console_agents);
+    setConsoleError(data.console_error ?? null);
+    setNeedsSeed(!!data.needs_seed);
   }
 
   async function deleteAgent(role: string) {
@@ -204,6 +239,82 @@ export default function SettingsPage() {
             >
               + adicionar agente
             </button>
+          </div>
+
+          {needsSeed && (
+            <div className="border border-planning bg-planning/10 p-4 mb-4">
+              <div className="text-sm text-planning font-semibold mb-1">
+                ⚠ Nenhum agente configurado no banco
+              </div>
+              <div className="text-xs text-ink-300 mb-3 leading-relaxed">
+                A tabela <code>agent_definitions</code> está vazia. Rode o setup
+                para semear os 7 agentes builtin e fazer deploy no Claude. Isso
+                também sincroniza os agentes que já existem no Console.
+              </div>
+              <button
+                onClick={runSeed}
+                disabled={seeding}
+                className="bg-planning text-ink-950 px-3 py-1.5 text-xs font-semibold hover:bg-planning/80 disabled:opacity-50"
+              >
+                {seeding ? "rodando setup..." : "rodar setup agora"}
+              </button>
+            </div>
+          )}
+
+          {/* Agents existentes no Claude Console */}
+          <div className="border border-ink-800 bg-ink-900/30 p-4 mb-6">
+            <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
+              // agentes no claude console ({consoleAgents.length})
+            </div>
+            {consoleError ? (
+              <div className="text-xs text-qa font-mono">
+                erro ao listar do Console: {consoleError}
+              </div>
+            ) : consoleAgents.length === 0 ? (
+              <div className="text-xs text-ink-400 italic">
+                nenhum agente encontrado no Claude Console
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {consoleAgents.map((ca) => (
+                  <div
+                    key={ca.id}
+                    className="flex items-center gap-2 text-xs py-1 border-b border-ink-800 last:border-0"
+                  >
+                    <span className="text-ink-100">{ca.name}</span>
+                    <span className="text-ink-400 font-mono text-[10px]">
+                      {ca.id}
+                    </span>
+                    {ca.model && (
+                      <span className="text-ink-400 text-[10px]">
+                        · {ca.model}
+                      </span>
+                    )}
+                    {ca.version !== undefined && (
+                      <span className="text-ink-400 text-[10px]">
+                        · v{ca.version}
+                      </span>
+                    )}
+                    <span className="ml-auto">
+                      {ca.mapped_stage ? (
+                        <span
+                          className={`text-[10px] uppercase tracking-widest ${
+                            STAGE_INFO[ca.mapped_stage]?.color ?? "text-ink-400"
+                          }`}
+                        >
+                          {STAGE_INFO[ca.mapped_stage]?.label ??
+                            ca.mapped_stage}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-ink-400 italic">
+                          não mapeado a uma stage
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="space-y-6">
