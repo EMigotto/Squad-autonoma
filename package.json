@@ -5,8 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "setup-agents": "tsx scripts/setup-agents.ts"
+    "start": "next start"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
@@ -26,7 +25,6 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }
