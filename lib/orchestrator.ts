@@ -1,6 +1,6 @@
 /**
  * Orquestrador: máquina de estados do Kanban.
- * Passa GITHUB_TOKEN e protótipos HTML dentro da initial_message do agente.
+ * Lê app_settings para adaptar comportamento (auto-merge, auto-advance, etc).
  */
 import { beta } from "@/lib/claude";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -31,6 +31,24 @@ function normalizeSlug(s: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+async function getAppSettings() {
+  const sb = createServiceClient();
+  const { data } = await sb
+    .from("app_settings")
+    .select("*")
+    .eq("id", 1)
+    .single();
+  return (
+    data ?? {
+      auto_merge_prs: false,
+      commit_to_existing_branch: false,
+      auto_advance_after_pm: false,
+      auto_advance_after_tl: false,
+      default_base_branch: "main",
+    }
+  );
+}
+
 async function ensureFeatureEnvironment(featureId: string) {
   const sb = createServiceClient();
   const { data: feature, error } = await sb
@@ -58,7 +76,6 @@ async function ensureFeatureEnvironment(featureId: string) {
   return feature;
 }
 
-// Baixa anexos de uma feature do Supabase Storage e retorna conteúdo embutível
 async function fetchAttachmentContents(featureId: string): Promise<
   Array<{ filename: string; content: string; truncated: boolean }>
 > {
@@ -71,7 +88,6 @@ async function fetchAttachmentContents(featureId: string): Promise<
   if (!attachments || attachments.length === 0) return [];
 
   const results = [];
-  // Limite por arquivo na initial_message — evita estourar context window
   const MAX_PER_FILE = 30000;
 
   for (const att of attachments) {
@@ -79,7 +95,6 @@ async function fetchAttachmentContents(featureId: string): Promise<
       .from("feature-attachments")
       .download(att.storage_path);
     if (error || !data) continue;
-
     const text = await data.text();
     const truncated = text.length > MAX_PER_FILE;
     results.push({
@@ -88,7 +103,6 @@ async function fetchAttachmentContents(featureId: string): Promise<
       truncated,
     });
   }
-
   return results;
 }
 
@@ -120,8 +134,9 @@ export async function startStage(
 
   const feature = await ensureFeatureEnvironment(card.feature_id);
   const attachments = await fetchAttachmentContents(card.feature_id);
+  const settings = await getAppSettings();
 
-  const userMsg = initialMessage ?? defaultKickoff(card, feature, attachments);
+  const userMsg = initialMessage ?? defaultKickoff(card, feature, attachments, settings);
 
   const session = await beta.sessions.create({
     agent: agentRow.claude_agent_id,
@@ -229,17 +244,13 @@ export async function createFeature(input: {
   github_repo: string;
   github_parent_issue: number;
   created_by?: string;
-  attachments?: Array<{ path: string; filename: string }>;
 }): Promise<{ feature_id: string; card_id: string }> {
   const sb = createServiceClient();
   const normalizedSlug = normalizeSlug(input.slug);
 
-  // Não passa attachments para o insert (não é coluna em features)
-  const { attachments, ...featureData } = input;
-
   const { data: feature, error: fErr } = await sb
     .from("features")
-    .insert({ ...featureData, slug: normalizedSlug })
+    .insert({ ...input, slug: normalizedSlug })
     .select("id")
     .single();
   if (fErr || !feature) throw fErr ?? new Error("failed to create feature");
@@ -255,15 +266,9 @@ export async function createFeature(input: {
     .single();
   if (cErr || !card) throw cErr ?? new Error("failed to create card");
 
-  // NOTA: a route /api/features persiste os feature_attachments antes desta função retornar.
-  // Mas como startStage é chamado a seguir, os anexos podem ainda não estar no DB.
-  // Pra resolver, retornamos primeiro o card_id e a route dispara startStage depois.
-  // (ver mudança na route que move a chamada de startStage pra depois do insert de anexos)
-
   return { feature_id: feature.id, card_id: card.id };
 }
 
-// Função pública pra disparar manualmente quando anexos já foram persistidos
 export async function kickoffFirstStage(cardId: string): Promise<string> {
   return startStage(cardId);
 }
@@ -277,7 +282,12 @@ function defaultKickoff(
     github_repo: string;
     github_parent_issue: number | null;
   },
-  attachments: Array<{ filename: string; content: string; truncated: boolean }>
+  attachments: Array<{ filename: string; content: string; truncated: boolean }>,
+  settings: {
+    auto_merge_prs: boolean;
+    commit_to_existing_branch: boolean;
+    default_base_branch: string;
+  }
 ): string {
   const token = process.env.GITHUB_TOKEN ?? "(missing)";
   const [owner, repo] = feature.github_repo.split("/");
@@ -290,9 +300,39 @@ function defaultKickoff(
     `Token: ${token}\n` +
     `Clone URL: https://x-access-token:${token}@github.com/${feature.github_repo}.git\n` +
     `API auth header: Authorization: token ${token}\n` +
+    `Default base branch: ${settings.default_base_branch}\n` +
     `---\n`;
 
-  // Bloco de protótipos — incluído em TODAS as stages (PM, TL, Devs, QA usam)
+  // Bloco de instruções de workflow baseado nas settings
+  let workflowBlock = "";
+  if (settings.commit_to_existing_branch) {
+    workflowBlock =
+      `\n--- Workflow mode: COMMIT-DIRECT ---\n` +
+      `IMPORTANT: Commit directly to '${settings.default_base_branch}' branch.\n` +
+      `Do NOT create a new branch. Do NOT open a PR.\n` +
+      `After commit, push to origin/${settings.default_base_branch}.\n` +
+      `End your turn with the commit SHA.\n` +
+      `---\n`;
+  } else if (settings.auto_merge_prs) {
+    workflowBlock =
+      `\n--- Workflow mode: AUTO-MERGE ---\n` +
+      `Create a branch, commit, open PR (NOT draft, real PR ready for merge).\n` +
+      `After the PR is open AND CI passes, merge it yourself via:\n` +
+      `  curl -X PUT -H "Authorization: token \${TOKEN}" \\\n` +
+      `    https://api.github.com/repos/<owner>/<repo>/pulls/<number>/merge \\\n` +
+      `    -d '{"merge_method":"squash"}'\n` +
+      `If CI fails, report which check failed and STOP. Do not force merge.\n` +
+      `End your turn with the merged commit SHA.\n` +
+      `---\n`;
+  } else {
+    workflowBlock =
+      `\n--- Workflow mode: PR-REVIEW (default) ---\n` +
+      `Create a branch, commit, open a DRAFT PR against ${settings.default_base_branch}.\n` +
+      `Do NOT merge — a human reviews and merges.\n` +
+      `End your turn with the PR URL.\n` +
+      `---\n`;
+  }
+
   let attachmentBlock = "";
   if (attachments.length > 0) {
     attachmentBlock =
@@ -302,13 +342,12 @@ function defaultKickoff(
       `These HTML prototypes are the SOURCE OF TRUTH for the UI of this feature.\n` +
       `Do NOT invent UI not present in these files. Describe / implement EXACTLY\n` +
       `the screens, components, flows, copy, and visual elements shown.\n` +
-      `Save each prototype into the repo at docs/features/<slug>/prototypes/<filename>\n` +
-      `as part of your work.\n\n` +
+      `Save each prototype into the repo at docs/features/<slug>/prototypes/<filename>.\n\n` +
       attachments
         .map(
           (a, i) =>
             `### Prototype ${i + 1}: ${a.filename}${
-              a.truncated ? " (TRUNCATED — fetch full file from /workspace/repo if needed)" : ""
+              a.truncated ? " (TRUNCATED)" : ""
             }\n\n\`\`\`html\n${a.content}\n\`\`\``
         )
         .join("\n\n") +
@@ -321,8 +360,8 @@ function defaultKickoff(
       `Build the spec for feature '${feature.title}' (slug: ${feature.slug}).\n\n` +
       `Initial description:\n${feature.description}\n` +
       credBlock +
-      attachmentBlock +
-      `\nWhen done, open the draft PR via the GitHub API and reply with the URL.`
+      workflowBlock +
+      attachmentBlock
     );
   }
   if (stage === "planning") {
@@ -333,16 +372,16 @@ function defaultKickoff(
       `Produce the ADR and decompose into chunks (one sub-issue per chunk).\n` +
       `Parent issue: #${feature.github_parent_issue}.` +
       credBlock +
+      workflowBlock +
       attachmentBlock
     );
   }
   if (stage === "development") {
     return (
       `All chunks for feature '${feature.slug}' are planned.\n` +
-      `List the chunks ready to start and the suggested order. I will dispatch\n` +
-      `Dev Agents one by one. Each Dev MUST implement exactly the UI shown in the\n` +
-      `approved prototypes — fidelidade visual is non-negotiable.` +
+      `List the chunks ready to start and the suggested order.` +
       credBlock +
+      workflowBlock +
       attachmentBlock
     );
   }
@@ -350,9 +389,9 @@ function defaultKickoff(
     return (
       `All Dev PRs for feature '${feature.slug}' are merged into ` +
       `feat/${feature.slug}/integration.\n` +
-      `Write the test suite (including visual regression for the approved prototypes),\n` +
-      `ensure CI is green, and report coverage.` +
+      `Write the test suite, ensure CI is green, and report coverage.` +
       credBlock +
+      workflowBlock +
       attachmentBlock
     );
   }
