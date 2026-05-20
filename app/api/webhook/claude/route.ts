@@ -60,30 +60,73 @@ async function handleSessionIdled(sessionId: string) {
     .eq("claude_session_id", sessionId)
     .single();
 
-  if (!card || card.status !== "running") return;
+  if (!card) return;
+  // Cards já cancelados ou done não recebem novo gate
+  if (
+    card.status === "cancelled" ||
+    card.status === "done" ||
+    card.stage === "done"
+  )
+    return;
 
-  const session = await beta.sessions.retrieve(sessionId);
+  let session: any = null;
+  try {
+    session = await beta.sessions.retrieve(sessionId);
+  } catch (e) {
+    console.error("[webhook] failed to retrieve session", e);
+  }
+
   const summary = extractSummary(session);
 
-  const role = roleForStage(card.stage);
-  const { data: assignee } = await sb
-    .from("user_profiles")
-    .select("id")
-    .eq("role", role)
-    .limit(1)
-    .single();
+  // Persiste a resposta do agente no chat history (pra ele aparecer no chat ao vivo)
+  if (summary) {
+    await sb.from("card_chat_messages").insert({
+      card_id: card.id,
+      session_id: sessionId,
+      role: "agent",
+      content: summary,
+    });
+  }
 
-  await sb
-    .from("cards")
-    .update({ status: "awaiting_review" })
-    .eq("id", card.id);
+  // Card só vai pra awaiting_review se ainda estiver running
+  // (chat refining mantém running → idle → running ciclicamente)
+  if (card.status === "running") {
+    const role = roleForStage(card.stage);
+    const { data: assignee } = await sb
+      .from("user_profiles")
+      .select("id")
+      .eq("role", role)
+      .limit(1)
+      .single();
 
-  await sb.from("human_gates").insert({
-    card_id: card.id,
-    assignee_id: assignee?.id ?? null,
-    summary,
-    artifacts_json: [],
-  });
+    await sb
+      .from("cards")
+      .update({ status: "awaiting_review" })
+      .eq("id", card.id);
+
+    // Verifica se já existe um gate aberto pra esse card (continuação de chat)
+    const { data: existingGate } = await sb
+      .from("human_gates")
+      .select("id")
+      .eq("card_id", card.id)
+      .is("decision", null)
+      .single();
+
+    if (!existingGate) {
+      await sb.from("human_gates").insert({
+        card_id: card.id,
+        assignee_id: assignee?.id ?? null,
+        summary,
+        artifacts_json: [],
+      });
+    } else {
+      // Atualiza o summary do gate existente com a resposta mais recente
+      await sb
+        .from("human_gates")
+        .update({ summary })
+        .eq("id", existingGate.id);
+    }
+  }
 }
 
 function roleForStage(stage: string): string {
@@ -98,10 +141,11 @@ function roleForStage(stage: string): string {
 }
 
 function extractSummary(session: any): string {
-  const messages = session?.messages ?? [];
+  if (!session) return "(no session data)";
+  const messages = session?.messages ?? session?.events ?? [];
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role !== "assistant") continue;
+    if (m.role !== "assistant" && m.type !== "agent.message") continue;
     if (typeof m.content === "string") return m.content;
     for (const block of m.content ?? []) {
       if (block.type === "text") return block.text;

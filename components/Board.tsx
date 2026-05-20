@@ -16,6 +16,7 @@ import Column from "./Column";
 import FeatureCard from "./FeatureCard";
 import CreateFeatureDialog from "./CreateFeatureDialog";
 import CardDetailPanel from "./CardDetailPanel";
+import TransitionDialog from "./TransitionDialog";
 
 interface Props {
   currentUser: { id: string; name: string; role: string };
@@ -31,6 +32,13 @@ interface Props {
 
 const STAGE_ORDER = ["discovery", "planning", "development", "qa", "done"];
 
+const NEXT_STAGE: Record<string, string> = {
+  discovery: "planning",
+  planning: "development",
+  development: "qa",
+  qa: "done",
+};
+
 export default function Board({
   currentUser,
   initialStages,
@@ -42,8 +50,9 @@ export default function Board({
   const [activeCard, setActiveCard] = useState<any | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [openCardId, setOpenCardId] = useState<string | null>(null);
+  const [transitionCardId, setTransitionCardId] = useState<string | null>(null);
+  const [dragError, setDragError] = useState<string | null>(null);
 
-  // Realtime: re-fetch quando cards mudam
   useEffect(() => {
     const sb = createClient();
     const channel = sb
@@ -56,6 +65,11 @@ export default function Board({
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "human_gates" },
+        () => refresh()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "features" },
         () => refresh()
       )
       .subscribe();
@@ -87,10 +101,11 @@ export default function Board({
   }, [cards]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
   function handleDragStart(e: DragStartEvent) {
+    setDragError(null);
     const card = cards.find((c) => c.id === e.active.id);
     setActiveCard(card);
   }
@@ -104,8 +119,27 @@ export default function Board({
     const targetStage = String(over.id);
     if (targetStage === card.stage) return;
 
-    // Drag pra outra coluna: abre o detail panel pra decidir
-    setOpenCardId(card.id);
+    // Só permite drag pra próxima stage adjacente
+    const expectedNext = NEXT_STAGE[card.stage];
+    if (targetStage !== expectedNext) {
+      setDragError(
+        `não dá pra pular etapas. ${card.stage} → ${expectedNext} é o próximo passo natural.`
+      );
+      setTimeout(() => setDragError(null), 4000);
+      return;
+    }
+
+    // Só permite drag se status é awaiting_review
+    if (card.status !== "awaiting_review") {
+      setDragError(
+        `card precisa estar em "aguarda revisão" pra avançar (atual: ${card.status})`
+      );
+      setTimeout(() => setDragError(null), 4000);
+      return;
+    }
+
+    // Abre o dialog de transição com preview
+    setTransitionCardId(card.id);
   }
 
   const totalCards = cards.length;
@@ -117,7 +151,6 @@ export default function Board({
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Top bar */}
       <header className="border-b border-ink-700 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-6">
           <div>
@@ -129,7 +162,6 @@ export default function Board({
               <span className="text-ink-400"> · {currentUser.role}</span>
             </div>
           </div>
-
           <div className="flex items-center gap-4 text-xs text-ink-400 ml-4">
             <span>
               <span className="text-ink-100">{totalCards}</span> cards
@@ -164,7 +196,6 @@ export default function Board({
         </div>
       </header>
 
-      {/* Diagnostics banner */}
       {diagnostics?.stagesError && (
         <div className="border-b border-qa bg-qa/10 px-6 py-2 text-xs text-qa font-mono">
           aviso: erro ao carregar stages — {diagnostics.stagesError}. Usando fallback.
@@ -172,16 +203,20 @@ export default function Board({
       )}
       {diagnostics?.stagesFromFallback && !diagnostics?.stagesError && (
         <div className="border-b border-planning bg-planning/10 px-6 py-2 text-xs text-planning font-mono">
-          aviso: tabela stages está vazia no Supabase. Rode a migration v3-migration.sql.
+          aviso: tabela stages vazia. Rode v3-migration.sql no Supabase.
         </div>
       )}
       {settings?.auto_merge_prs && (
         <div className="border-b border-development bg-development/10 px-6 py-2 text-xs text-development font-mono">
-          ⚡ modo automático ativo: PRs serão merged automaticamente após CI verde
+          ⚡ modo auto-merge ativo
+        </div>
+      )}
+      {dragError && (
+        <div className="border-b border-qa bg-qa/10 px-6 py-2 text-xs text-qa font-mono">
+          ✗ {dragError}
         </div>
       )}
 
-      {/* Board */}
       <DndContext
         sensors={sensors}
         onDragStart={handleDragStart}
@@ -221,6 +256,17 @@ export default function Board({
           onClose={() => setOpenCardId(null)}
         />
       )}
+
+      {transitionCardId && (
+        <TransitionDialog
+          cardId={transitionCardId}
+          onClose={() => setTransitionCardId(null)}
+          onConfirm={() => {
+            setTransitionCardId(null);
+            window.location.reload();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -232,10 +278,8 @@ function EmptyState() {
         <div className="text-xs uppercase tracking-widest text-ink-400 mb-2">
           // sem colunas
         </div>
-        <div className="text-sm text-ink-300 mb-4">
-          Nenhum stage encontrado no banco. Rode a migration{" "}
-          <code className="text-ink-100">v3-migration.sql</code> no Supabase para
-          habilitar as policies de RLS.
+        <div className="text-sm text-ink-300">
+          Nenhum stage no banco. Rode <code className="text-ink-100">v3-migration.sql</code>.
         </div>
       </div>
     </div>

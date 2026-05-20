@@ -1,6 +1,6 @@
 /**
  * Orquestrador: máquina de estados do Kanban.
- * Lê app_settings para adaptar comportamento (auto-merge, auto-advance, etc).
+ * Inclui: cancel, completeEarly, previewKickoff, chatWithAgent.
  */
 import { beta } from "@/lib/claude";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -61,10 +61,7 @@ async function ensureFeatureEnvironment(featureId: string) {
   if (!feature.claude_environment_id) {
     const env = await beta.environments.create({
       name: `env-${normalizeSlug(feature.slug)}`,
-      config: {
-        type: "cloud",
-        networking: { type: "unrestricted" },
-      },
+      config: { type: "cloud", networking: { type: "unrestricted" } },
     });
     await sb
       .from("features")
@@ -76,9 +73,7 @@ async function ensureFeatureEnvironment(featureId: string) {
   return feature;
 }
 
-async function fetchAttachmentContents(featureId: string): Promise<
-  Array<{ filename: string; content: string; truncated: boolean }>
-> {
+async function fetchAttachmentContents(featureId: string) {
   const sb = createServiceClient();
   const { data: attachments } = await sb
     .from("feature_attachments")
@@ -106,9 +101,70 @@ async function fetchAttachmentContents(featureId: string): Promise<
   return results;
 }
 
+// ============================================================
+// previewKickoff: monta a initial_message SEM disparar nada
+// ============================================================
+export async function previewKickoff(
+  cardId: string,
+  targetStage: StageCode
+): Promise<{
+  initial_message: string;
+  agent_name: string;
+  agent_id: string;
+  model: string;
+}> {
+  const sb = createServiceClient();
+
+  const { data: card } = await sb
+    .from("cards")
+    .select("*")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error(`card ${cardId} not found`);
+
+  const role = STAGE_TO_ROLE[targetStage];
+  const { data: agentRow } = await sb
+    .from("agents")
+    .select("*")
+    .eq("role", role)
+    .eq("is_current", true)
+    .single();
+  if (!agentRow) throw new Error(`no agent for role=${role}`);
+
+  const { data: feature } = await sb
+    .from("features")
+    .select("*")
+    .eq("id", card.feature_id)
+    .single();
+  if (!feature) throw new Error("feature not found");
+
+  const attachments = await fetchAttachmentContents(card.feature_id);
+  const settings = await getAppSettings();
+
+  // Para preview, simulamos que o card está no targetStage
+  const fakeCard = { ...card, stage: targetStage };
+  const initial_message = defaultKickoff(
+    fakeCard,
+    feature,
+    attachments,
+    settings
+  );
+
+  return {
+    initial_message,
+    agent_name: agentRow.role,
+    agent_id: agentRow.claude_agent_id,
+    model: role === "pm" ? "claude-haiku-4-5" : "claude-opus-4-6",
+  };
+}
+
+// ============================================================
+// startStage: cria session e dispara
+// ============================================================
 export async function startStage(
   cardId: string,
-  initialMessage?: string
+  initialMessage?: string,
+  targetStage?: StageCode
 ): Promise<string> {
   const sb = createServiceClient();
 
@@ -119,7 +175,8 @@ export async function startStage(
     .single();
   if (cardErr || !card) throw new Error(`card ${cardId} not found`);
 
-  const role = STAGE_TO_ROLE[card.stage as StageCode];
+  const stage = (targetStage ?? card.stage) as StageCode;
+  const role = STAGE_TO_ROLE[stage];
   const { data: agentRow, error: agentErr } = await sb
     .from("agents")
     .select("*")
@@ -136,12 +193,14 @@ export async function startStage(
   const attachments = await fetchAttachmentContents(card.feature_id);
   const settings = await getAppSettings();
 
-  const userMsg = initialMessage ?? defaultKickoff(card, feature, attachments, settings);
+  const userMsg =
+    initialMessage ??
+    defaultKickoff({ ...card, stage }, feature, attachments, settings);
 
   const session = await beta.sessions.create({
     agent: agentRow.claude_agent_id,
     environment_id: feature.claude_environment_id,
-    title: `${feature.slug} · ${card.stage}`,
+    title: `${feature.slug} · ${stage}`,
   });
 
   await beta.sessions.events.send(session.id, {
@@ -162,14 +221,72 @@ export async function startStage(
     })
     .eq("id", cardId);
 
+  // Persist na chat history para timeline
+  await sb.from("card_chat_messages").insert({
+    card_id: cardId,
+    session_id: session.id,
+    role: "system",
+    content: userMsg,
+  });
+
   return session.id;
 }
 
+// ============================================================
+// chatWithAgent: continua conversa em sessão existente
+// ============================================================
+export async function chatWithAgent(
+  cardId: string,
+  message: string,
+  sentBy?: string
+): Promise<{ session_id: string }> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error(`card ${cardId} not found`);
+  if (!card.claude_session_id)
+    throw new Error("card has no active session yet");
+
+  // Manda a mensagem para a sessão existente — agent volta a rodar
+  await beta.sessions.events.send(card.claude_session_id, {
+    events: [
+      {
+        type: "user.message",
+        content: [{ type: "text", text: message }],
+      },
+    ],
+  });
+
+  // Card volta pra running enquanto agent processa
+  await sb
+    .from("cards")
+    .update({ status: "running" })
+    .eq("id", cardId);
+
+  // Persist no histórico
+  await sb.from("card_chat_messages").insert({
+    card_id: cardId,
+    session_id: card.claude_session_id,
+    role: "user",
+    content: message,
+    sent_by: sentBy ?? null,
+  });
+
+  return { session_id: card.claude_session_id };
+}
+
+// ============================================================
+// advanceCard: decisão do humano (approved → próxima stage)
+// ============================================================
 export async function advanceCard(
   cardId: string,
   decision: "approved" | "rejected",
   reason?: string,
-  decidedBy?: string
+  decidedBy?: string,
+  overrideInitialMessage?: string
 ): Promise<void> {
   if (decision === "rejected" && !reason) {
     throw new Error("rejection requires a reason");
@@ -233,10 +350,100 @@ export async function advanceCard(
     .single();
 
   if (newCard) {
-    await startStage(newCard.id);
+    await startStage(newCard.id, overrideInitialMessage, nextStage);
   }
 }
 
+// ============================================================
+// cancelCard: encerra um card (e seu trabalho)
+// ============================================================
+export async function cancelCard(
+  cardId: string,
+  reason: string,
+  cancelledBy?: string
+): Promise<void> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*, feature:features(id)")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error("card not found");
+
+  await sb
+    .from("cards")
+    .update({ status: "cancelled" })
+    .eq("id", cardId);
+
+  // Fecha qualquer gate aberto
+  await sb
+    .from("human_gates")
+    .update({
+      decision: "rejected",
+      decision_reason: `cancelado: ${reason}`,
+      decided_by: cancelledBy,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("card_id", cardId)
+    .is("decision", null);
+
+  // Marca a feature como cancelada
+  await sb
+    .from("features")
+    .update({
+      cancelled_at: new Date().toISOString(),
+      cancelled_reason: reason,
+    })
+    .eq("id", card.feature.id);
+
+  // Note: deliberadamente NÃO matamos a sessão Claude.
+  // Beta API ainda não expõe session termination consistente. A sessão
+  // ficará idle naturalmente quando o agente terminar — só ignoramos os outputs.
+}
+
+// ============================================================
+// completeCardEarly: marca feature como concluída antes da hora
+// ============================================================
+export async function completeCardEarly(
+  cardId: string,
+  completedBy?: string
+): Promise<void> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*, feature:features(id)")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error("card not found");
+
+  await sb
+    .from("cards")
+    .update({ status: "done", stage: "done" })
+    .eq("id", cardId);
+
+  await sb
+    .from("human_gates")
+    .update({
+      decision: "approved",
+      decision_reason: "concluído antecipadamente pelo humano",
+      decided_by: completedBy,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("card_id", cardId)
+    .is("decision", null);
+
+  await sb
+    .from("features")
+    .update({
+      current_stage: "done",
+      completed_early_at: new Date().toISOString(),
+    })
+    .eq("id", card.feature.id);
+}
+
+// ============================================================
+// createFeature: cria feature + primeiro card
+// ============================================================
 export async function createFeature(input: {
   slug: string;
   title: string;
@@ -273,6 +480,9 @@ export async function kickoffFirstStage(cardId: string): Promise<string> {
   return startStage(cardId);
 }
 
+// ============================================================
+// defaultKickoff: monta initial_message
+// ============================================================
 function defaultKickoff(
   card: { stage: string },
   feature: {
@@ -297,40 +507,32 @@ function defaultKickoff(
     `Repo: ${feature.github_repo}\n` +
     `Owner: ${owner}\n` +
     `Repo name: ${repo}\n` +
-    `Token: ${token}\n` +
-    `Clone URL: https://x-access-token:${token}@github.com/${feature.github_repo}.git\n` +
-    `API auth header: Authorization: token ${token}\n` +
+    `Token: ${token === "(missing)" ? token : token.slice(0, 8) + "..."}\n` +
+    `Clone URL: https://x-access-token:${
+      token === "(missing)" ? token : token.slice(0, 8) + "..."
+    }@github.com/${feature.github_repo}.git\n` +
+    `API auth header: Authorization: token ${
+      token === "(missing)" ? token : token.slice(0, 8) + "..."
+    }\n` +
     `Default base branch: ${settings.default_base_branch}\n` +
-    `---\n`;
+    `---\n` +
+    `(token is masked in this preview; full token sent to agent at dispatch)\n`;
 
-  // Bloco de instruções de workflow baseado nas settings
   let workflowBlock = "";
   if (settings.commit_to_existing_branch) {
     workflowBlock =
       `\n--- Workflow mode: COMMIT-DIRECT ---\n` +
-      `IMPORTANT: Commit directly to '${settings.default_base_branch}' branch.\n` +
+      `Commit directly to '${settings.default_base_branch}' branch.\n` +
       `Do NOT create a new branch. Do NOT open a PR.\n` +
-      `After commit, push to origin/${settings.default_base_branch}.\n` +
-      `End your turn with the commit SHA.\n` +
-      `---\n`;
+      `End your turn with the commit SHA.\n---\n`;
   } else if (settings.auto_merge_prs) {
     workflowBlock =
       `\n--- Workflow mode: AUTO-MERGE ---\n` +
-      `Create a branch, commit, open PR (NOT draft, real PR ready for merge).\n` +
-      `After the PR is open AND CI passes, merge it yourself via:\n` +
-      `  curl -X PUT -H "Authorization: token \${TOKEN}" \\\n` +
-      `    https://api.github.com/repos/<owner>/<repo>/pulls/<number>/merge \\\n` +
-      `    -d '{"merge_method":"squash"}'\n` +
-      `If CI fails, report which check failed and STOP. Do not force merge.\n` +
-      `End your turn with the merged commit SHA.\n` +
-      `---\n`;
+      `Open PR, wait for CI, merge yourself with squash strategy.\n---\n`;
   } else {
     workflowBlock =
       `\n--- Workflow mode: PR-REVIEW (default) ---\n` +
-      `Create a branch, commit, open a DRAFT PR against ${settings.default_base_branch}.\n` +
-      `Do NOT merge — a human reviews and merges.\n` +
-      `End your turn with the PR URL.\n` +
-      `---\n`;
+      `Open a DRAFT PR. Human reviews and merges.\n---\n`;
   }
 
   let attachmentBlock = "";
@@ -339,19 +541,16 @@ function defaultKickoff(
       `\n--- Approved prototypes (${attachments.length} file${
         attachments.length > 1 ? "s" : ""
       }) ---\n` +
-      `These HTML prototypes are the SOURCE OF TRUTH for the UI of this feature.\n` +
-      `Do NOT invent UI not present in these files. Describe / implement EXACTLY\n` +
-      `the screens, components, flows, copy, and visual elements shown.\n` +
-      `Save each prototype into the repo at docs/features/<slug>/prototypes/<filename>.\n\n` +
+      `These are the SOURCE OF TRUTH for UI.\n` +
       attachments
         .map(
           (a, i) =>
             `### Prototype ${i + 1}: ${a.filename}${
               a.truncated ? " (TRUNCATED)" : ""
-            }\n\n\`\`\`html\n${a.content}\n\`\`\``
+            }\n[${a.content.length} bytes of HTML — embedded in actual dispatch]`
         )
-        .join("\n\n") +
-      `\n--- end prototypes ---\n`;
+        .join("\n") +
+      `\n---\n`;
   }
 
   const stage = card.stage;
@@ -367,9 +566,8 @@ function defaultKickoff(
   if (stage === "planning") {
     return (
       `The PM PR for feature '${feature.slug}' has been merged.\n` +
-      `Read docs/features/${feature.slug}/prd.md, acceptance-criteria.md, and the\n` +
-      `prototypes in docs/features/${feature.slug}/prototypes/.\n` +
-      `Produce the ADR and decompose into chunks (one sub-issue per chunk).\n` +
+      `Read docs/features/${feature.slug}/prd.md, acceptance-criteria.md, prototypes.\n` +
+      `Produce the ADR and decompose into chunks.\n` +
       `Parent issue: #${feature.github_parent_issue}.` +
       credBlock +
       workflowBlock +
@@ -378,8 +576,8 @@ function defaultKickoff(
   }
   if (stage === "development") {
     return (
-      `All chunks for feature '${feature.slug}' are planned.\n` +
-      `List the chunks ready to start and the suggested order.` +
+      `Chunks for feature '${feature.slug}' are planned. ` +
+      `Recommend Dev Agent order.` +
       credBlock +
       workflowBlock +
       attachmentBlock
@@ -387,9 +585,7 @@ function defaultKickoff(
   }
   if (stage === "qa") {
     return (
-      `All Dev PRs for feature '${feature.slug}' are merged into ` +
-      `feat/${feature.slug}/integration.\n` +
-      `Write the test suite, ensure CI is green, and report coverage.` +
+      `Dev PRs for '${feature.slug}' are merged. Write tests, run CI.` +
       credBlock +
       workflowBlock +
       attachmentBlock

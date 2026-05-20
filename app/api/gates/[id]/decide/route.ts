@@ -9,46 +9,45 @@ export async function POST(
   req: Request,
   { params }: { params: { id: string } }
 ) {
-  const sb = createClient();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-
-  const { decision, reason } = await req.json();
-  if (decision !== "approved" && decision !== "rejected") {
-    return NextResponse.json(
-      { error: "decision must be approved | rejected" },
-      { status: 400 }
-    );
-  }
-  if (decision === "rejected" && !reason) {
-    return NextResponse.json(
-      { error: "rejection requires reason" },
-      { status: 400 }
-    );
-  }
-
-  const svc = createServiceClient();
-  const { data: gate } = await svc
-    .from("human_gates")
-    .select("card_id")
-    .eq("id", params.id)
-    .is("decision", null)
-    .single();
-  if (!gate) {
-    return NextResponse.json(
-      { error: "gate not found or already decided" },
-      { status: 404 }
-    );
-  }
-
   try {
-    await advanceCard(gate.card_id, decision, reason, user.id);
+    const sb = createClient();
+    const {
+      data: { user },
+    } = await sb.auth.getUser();
+    if (!user)
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+    const body = await req.json();
+    if (!["approved", "rejected"].includes(body.decision)) {
+      return NextResponse.json(
+        { error: "decision must be 'approved' or 'rejected'" },
+        { status: 400 }
+      );
+    }
+
+    // Pega o card_id do gate
+    const svc = createServiceClient();
+    const { data: gate } = await svc
+      .from("human_gates")
+      .select("card_id")
+      .eq("id", params.id)
+      .single();
+    if (!gate)
+      return NextResponse.json({ error: "gate not found" }, { status: 404 });
+
+    await advanceCard(
+      gate.card_id,
+      body.decision,
+      body.reason,
+      user.id,
+      body.override_initial_message
+    );
+
     return NextResponse.json({ status: "ok" });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : String(e) },
+      { status: 500 }
+    );
   }
 }
