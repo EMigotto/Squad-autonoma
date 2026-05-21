@@ -267,7 +267,8 @@ export async function startStage(
 export async function chatWithAgent(
   cardId: string,
   message: string,
-  sentBy?: string
+  sentBy?: string,
+  images?: Array<{ media_type: string; data: string }>
 ): Promise<{ session_id: string }> {
   const sb = createServiceClient();
   const { data: card } = await sb
@@ -279,18 +280,35 @@ export async function chatWithAgent(
   if (!card.claude_session_id)
     throw new Error("card has no active session yet");
 
+  // Monta o content: texto + imagens (se houver)
+  const content: any[] = [];
+  if (message) content.push({ type: "text", text: message });
+  for (const img of images ?? []) {
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: img.media_type,
+        data: img.data,
+      },
+    });
+  }
+  if (content.length === 0) content.push({ type: "text", text: "(sem conteúdo)" });
+
   await beta.sessions.events.send(card.claude_session_id, {
-    events: [
-      { type: "user.message", content: [{ type: "text", text: message }] },
-    ],
+    events: [{ type: "user.message", content }],
   });
 
   await sb.from("cards").update({ status: "running" }).eq("id", cardId);
+
+  // Persiste o texto + marca quantas imagens foram anexadas
+  const persisted =
+    message + ((images?.length ?? 0) > 0 ? `\n[${images!.length} imagem(ns) anexada(s)]` : "");
   await sb.from("card_chat_messages").insert({
     card_id: cardId,
     session_id: card.claude_session_id,
     role: "user",
-    content: message,
+    content: persisted,
     sent_by: sentBy ?? null,
   });
 
@@ -804,6 +822,7 @@ export async function createFeature(input: {
   github_repo: string;
   github_parent_issue: number;
   project_id: string;
+  repository_id?: string;
   created_by?: string;
 }): Promise<{ feature_id: string; card_id: string }> {
   const sb = createServiceClient();

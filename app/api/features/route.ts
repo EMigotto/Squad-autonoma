@@ -37,7 +37,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // Resolve o projeto ativo e seu repositório
+    // Resolve o projeto ativo
     const projectId = await getActiveProjectId(user.id);
     if (!projectId) {
       return NextResponse.json(
@@ -45,12 +45,43 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-    const project = await getProject(projectId);
-    // Usa o repo do projeto, com fallback pro body (compat)
-    const githubRepo = project?.github_repo ?? body.github_repo;
+
+    // Resolve o repositório: usa o repository_id informado, ou o primeiro
+    // repositório do projeto, ou o github_repo do projeto (compat).
+    const svc = createServiceClient();
+    let githubRepo: string | undefined;
+    let repositoryId: string | undefined = body.repository_id;
+
+    if (repositoryId) {
+      const { data: repo } = await svc
+        .from("project_repositories")
+        .select("github_repo")
+        .eq("id", repositoryId)
+        .single();
+      githubRepo = repo?.github_repo;
+    } else {
+      // primeiro repo do projeto
+      const { data: repo } = await svc
+        .from("project_repositories")
+        .select("id, github_repo")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (repo) {
+        repositoryId = repo.id;
+        githubRepo = repo.github_repo;
+      }
+    }
+
+    // Fallback final: github_repo do projeto
+    if (!githubRepo) {
+      const project = await getProject(projectId);
+      githubRepo = project?.github_repo ?? body.github_repo;
+    }
     if (!githubRepo) {
       return NextResponse.json(
-        { error: "projeto sem github_repo configurado" },
+        { error: "projeto sem repositório configurado" },
         { status: 400 }
       );
     }
@@ -71,12 +102,12 @@ export async function POST(req: Request) {
         github_repo: githubRepo,
         github_parent_issue: body.github_parent_issue ?? 0,
         project_id: projectId,
+        repository_id: repositoryId,
         created_by: user.id,
       });
 
       // 2. Persiste feature_attachments rows (antes de disparar agente)
       if (attachmentPaths.length > 0) {
-        const svc = createServiceClient();
         const { error: attErr } = await svc.from("feature_attachments").insert(
           attachmentPaths.map((path, i) => ({
             feature_id: result.feature_id,

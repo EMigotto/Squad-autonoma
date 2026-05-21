@@ -74,8 +74,6 @@ export default function CardDetailPanel({
     loading: true,
   });
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatSending, setChatSending] = useState(false);
   const [showTransition, setShowTransition] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -93,7 +91,6 @@ export default function CardDetailPanel({
     loading: boolean;
     html_url?: string;
   } | null>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadDetail();
@@ -233,6 +230,15 @@ export default function CardDetailPanel({
         });
         loadChatHistory();
         if (data.status === "idle" || data.status === "completed") {
+          // Se a sessão terminou mas o card ainda está running, destrava
+          // automaticamente (fallback ao webhook).
+          if (detail?.card?.status === "running") {
+            try {
+              await fetch(`/api/cards/${cardId}/sync`, { method: "POST" });
+            } catch {
+              // silencioso
+            }
+          }
           loadDetail();
           loadArtifacts(); // re-fetch artifacts quando agent termina
         }
@@ -260,32 +266,6 @@ export default function CardDetailPanel({
       if (timer) clearTimeout(timer);
     };
   }, [detail?.card?.claude_session_id, detail?.card?.status]);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory.length]);
-
-  async function handleChatSend() {
-    if (!chatInput.trim()) return;
-    setChatSending(true);
-    try {
-      const res = await fetch(`/api/cards/${cardId}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: chatInput }),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        alert("erro: " + (j.error ?? res.status));
-      } else {
-        setChatInput("");
-        await loadChatHistory();
-        await loadDetail();
-      }
-    } finally {
-      setChatSending(false);
-    }
-  }
 
   async function handleCancel() {
     if (!cancelReason.trim()) {
@@ -531,61 +511,17 @@ export default function CardDetailPanel({
             )}
 
             {canChat && (
-              <Section title="conversar com o agente">
-                <div className="text-[11px] text-ink-400 mb-3">
-                  Peça mudanças no plano ou esclarecimentos. O agente retoma e
-                  atualiza arquivos no repo.
-                </div>
-
-                <div className="border border-ink-700 bg-ink-900 max-h-64 overflow-y-auto p-3 space-y-3 mb-3">
-                  {chatHistory.length === 0 && (
-                    <div className="text-xs text-ink-400 italic">
-                      ainda sem mensagens
-                    </div>
-                  )}
-                  {chatHistory
-                    .filter((m) => m.role !== "system" || chatHistory.length < 3)
-                    .map((msg) => (
-                      <ChatBubble key={msg.id} message={msg} />
-                    ))}
-                  <div ref={chatEndRef} />
-                </div>
-
-                <div className="flex gap-2">
-                  <textarea
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="ex: divida esse chunk em dois..."
-                    rows={2}
-                    disabled={chatSending || session.status === "running"}
-                    className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none disabled:opacity-50"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                        e.preventDefault();
-                        handleChatSend();
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={handleChatSend}
-                    disabled={
-                      chatSending ||
-                      !chatInput.trim() ||
-                      session.status === "running"
-                    }
-                    className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300 disabled:opacity-50 self-start"
-                  >
-                    {chatSending
-                      ? "..."
-                      : session.status === "running"
-                        ? "agente ocupado"
-                        : "enviar"}
-                  </button>
-                </div>
-                <div className="text-[10px] text-ink-400 mt-1">
-                  ctrl+enter para enviar
-                </div>
-              </Section>
+              <AgentChat
+                cardId={cardId}
+                stage={card.stage}
+                sessionStatus={session.status}
+                modelName={session.agent_name}
+                chatHistory={chatHistory}
+                onSent={() => {
+                  loadChatHistory();
+                  loadDetail();
+                }}
+              />
             )}
 
             {!isTerminal && (
@@ -1386,7 +1322,251 @@ function EventRow({ event }: { event: any }) {
   );
 }
 
-function ChatBubble({ message }: { message: ChatMessage }) {
+function AgentChat({
+  cardId,
+  stage,
+  sessionStatus,
+  modelName,
+  chatHistory,
+  onSent,
+}: {
+  cardId: string;
+  stage: string;
+  sessionStatus: string;
+  modelName?: string;
+  chatHistory: ChatMessage[];
+  onSent: () => void;
+}) {
+  const [input, setInput] = useState("");
+  const [images, setImages] = useState<
+    { name: string; preview: string; media_type: string; data: string }[]
+  >([]);
+  const [sending, setSending] = useState(false);
+  const [model, setModel] = useState<string | null>(null);
+  const [agentName, setAgentName] = useState<string | null>(modelName ?? null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const busy = sessionStatus === "running";
+
+  // Busca o modelo do agente que atua nesta stage
+  useEffect(() => {
+    fetch("/api/agents")
+      .then((r) => r.json())
+      .then((data) => {
+        const a = (data.agents ?? []).find(
+          (x: any) => x.stage === stage && x.enabled
+        );
+        if (a) {
+          setModel(a.model);
+          setAgentName(a.name);
+        }
+      })
+      .catch(() => {});
+  }, [stage]);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory.length]);
+
+  async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
+    for (const f of selected) {
+      if (!f.type.startsWith("image/")) continue;
+      if (f.size > 5 * 1024 * 1024) {
+        alert(`${f.name} é maior que 5MB`);
+        continue;
+      }
+      const data = await new Promise<string>((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res((reader.result as string).split(",")[1]);
+        reader.onerror = rej;
+        reader.readAsDataURL(f);
+      });
+      const preview = URL.createObjectURL(f);
+      setImages((prev) => [
+        ...prev,
+        { name: f.name, preview, media_type: f.type, data },
+      ]);
+    }
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function removeImage(i: number) {
+    setImages((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  async function send() {
+    if (!input.trim() && images.length === 0) return;
+    setSending(true);
+    try {
+      const res = await fetch(`/api/cards/${cardId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: input,
+          images: images.map((img) => ({
+            media_type: img.media_type,
+            data: img.data,
+          })),
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert("erro: " + (j.error ?? res.status));
+      } else {
+        setInput("");
+        setImages([]);
+        onSent();
+      }
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const visibleMessages = chatHistory.filter(
+    (m) => m.role !== "system" || chatHistory.length < 3
+  );
+
+  return (
+    <section>
+      <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
+        // conversa com o agente
+      </div>
+
+      {/* Janela de chat estilo Claude Code */}
+      <div className="border border-ink-700 bg-ink-950 flex flex-col">
+        {/* Header com modelo e status */}
+        <div className="border-b border-ink-800 px-3 py-2 flex items-center gap-2 bg-ink-900/60">
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                busy ? "bg-development animate-pulse" : "bg-qa"
+              }`}
+            />
+            <span className="text-xs font-semibold text-ink-100">
+              {agentName ?? "Agente"}
+            </span>
+          </div>
+          {model && (
+            <span className="text-[10px] font-mono text-ink-400 border border-ink-700 px-1.5 py-0.5">
+              {model}
+            </span>
+          )}
+          <span className="ml-auto text-[10px] uppercase tracking-widest text-ink-400">
+            {busy ? "executando…" : "pronto"}
+          </span>
+        </div>
+
+        {/* Mensagens */}
+        <div className="max-h-80 overflow-y-auto p-3 space-y-3">
+          {visibleMessages.length === 0 && (
+            <div className="text-xs text-ink-400 italic text-center py-6">
+              comece a conversa — peça mudanças, esclareça requisitos ou
+              anexe um print.
+            </div>
+          )}
+          {visibleMessages.map((msg) => (
+            <ChatBubble key={msg.id} message={msg} agentName={agentName} />
+          ))}
+          {busy && (
+            <div className="flex items-center gap-2 text-[11px] text-development">
+              <span className="flex gap-0.5">
+                <span className="w-1 h-1 rounded-full bg-development animate-bounce" />
+                <span
+                  className="w-1 h-1 rounded-full bg-development animate-bounce"
+                  style={{ animationDelay: "0.15s" }}
+                />
+                <span
+                  className="w-1 h-1 rounded-full bg-development animate-bounce"
+                  style={{ animationDelay: "0.3s" }}
+                />
+              </span>
+              {agentName ?? "agente"} está trabalhando
+            </div>
+          )}
+          <div ref={endRef} />
+        </div>
+
+        {/* Preview de imagens anexadas */}
+        {images.length > 0 && (
+          <div className="border-t border-ink-800 px-3 py-2 flex flex-wrap gap-2">
+            {images.map((img, i) => (
+              <div key={i} className="relative group">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={img.preview}
+                  alt={img.name}
+                  className="w-14 h-14 object-cover border border-ink-700"
+                />
+                <button
+                  onClick={() => removeImage(i)}
+                  className="absolute -top-1.5 -right-1.5 bg-qa text-ink-950 w-4 h-4 flex items-center justify-center text-[10px] leading-none rounded-full"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Input */}
+        <div className="border-t border-ink-800 p-2">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="mensagem para o agente... (ctrl+enter envia)"
+            rows={2}
+            disabled={sending || busy}
+            className="w-full bg-transparent text-sm text-ink-100 px-1 py-1 focus:outline-none resize-none disabled:opacity-50"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handleImageSelect}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={sending || busy}
+              title="anexar imagem"
+              className="text-ink-400 hover:text-ink-100 text-sm px-1.5 py-1 border border-ink-700 hover:border-ink-500 disabled:opacity-50"
+            >
+              📎 imagem
+            </button>
+            <span className="text-[10px] text-ink-500">
+              {model ? `rodando em ${model}` : ""}
+            </span>
+            <button
+              onClick={send}
+              disabled={sending || busy || (!input.trim() && images.length === 0)}
+              className="ml-auto bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300 disabled:opacity-50"
+            >
+              {sending ? "enviando…" : busy ? "agente ocupado" : "enviar"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ChatBubble({
+  message,
+  agentName,
+}: {
+  message: ChatMessage;
+  agentName?: string | null;
+}) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   if (isSystem) {
@@ -1398,19 +1578,35 @@ function ChatBubble({ message }: { message: ChatMessage }) {
     );
   }
   return (
-    <div className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}>
-      <div className="text-[10px] text-ink-400 mb-0.5">
-        {isUser ? "você" : "agent"} ·{" "}
-        {new Date(message.created_at).toLocaleTimeString()}
-      </div>
+    <div className={`flex gap-2 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+      {/* Avatar */}
       <div
-        className={`max-w-[85%] px-3 py-2 text-xs whitespace-pre-wrap ${
+        className={`shrink-0 w-6 h-6 flex items-center justify-center text-[10px] font-semibold border ${
           isUser
-            ? "bg-discovery/10 border border-discovery/40 text-ink-100"
-            : "bg-ink-900 border border-ink-700 text-ink-100"
+            ? "border-discovery/40 text-discovery"
+            : "border-development/40 text-development"
         }`}
       >
-        {message.content}
+        {isUser ? "EU" : "AI"}
+      </div>
+      <div
+        className={`flex flex-col max-w-[80%] ${
+          isUser ? "items-end" : "items-start"
+        }`}
+      >
+        <div className="text-[10px] text-ink-400 mb-0.5">
+          {isUser ? "você" : agentName ?? "agente"} ·{" "}
+          {new Date(message.created_at).toLocaleTimeString()}
+        </div>
+        <div
+          className={`px-3 py-2 text-xs whitespace-pre-wrap leading-relaxed ${
+            isUser
+              ? "bg-discovery/10 border border-discovery/40 text-ink-100"
+              : "bg-ink-900 border border-ink-700 text-ink-100"
+          }`}
+        >
+          {message.content}
+        </div>
       </div>
     </div>
   );

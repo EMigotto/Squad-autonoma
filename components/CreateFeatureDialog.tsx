@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 function stringifyError(err: unknown): string {
@@ -38,11 +38,23 @@ export default function CreateFeatureDialog({
     github_repo: "",
     github_parent_issue: "",
   });
+  const [repos, setRepos] = useState<any[]>([]);
+  const [selectedRepoId, setSelectedRepoId] = useState<string>("");
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>("");
   const [stack, setStack] = useState<string>("");
   const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/projects/repos")
+      .then((r) => r.json())
+      .then((data) => {
+        setRepos(data.repos ?? []);
+        if (data.repos?.length) setSelectedRepoId(data.repos[0].id);
+      })
+      .catch(() => {});
+  }, []);
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? []);
@@ -144,6 +156,7 @@ export default function CreateFeatureDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
+          repository_id: selectedRepoId || undefined,
           github_parent_issue:
             parseInt(form.github_parent_issue, 10) || 0,
           attachment_paths: attachmentPaths,
@@ -233,9 +246,28 @@ export default function CreateFeatureDialog({
             {field("slug", "slug", "ex: dark-mode-toggle")}
             {field("title", "título", "ex: Dark mode no app")}
             {field("description", "descrição", "O que precisa ser feito?", true)}
-            <div className="text-[11px] text-ink-400 border border-ink-800 bg-ink-900/40 p-2">
-              o repositório será o configurado no projeto ativo. Pra alterar, vá
-              em /settings → projeto.
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+                repositório
+              </label>
+              {repos.length === 0 ? (
+                <div className="text-[11px] text-planning border border-planning/40 bg-planning/5 p-2">
+                  nenhum repositório no projeto. Adicione um em /settings →
+                  projeto.
+                </div>
+              ) : (
+                <select
+                  value={selectedRepoId}
+                  onChange={(e) => setSelectedRepoId(e.target.value)}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+                >
+                  {repos.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.label ?? r.github_repo} ({r.github_repo})
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
             {field(
               "github_parent_issue",

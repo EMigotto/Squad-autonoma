@@ -18,14 +18,20 @@ export async function POST(
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
     const body = await req.json();
-    if (!body.message || typeof body.message !== "string") {
+    const hasImages = Array.isArray(body.images) && body.images.length > 0;
+    if ((!body.message || typeof body.message !== "string") && !hasImages) {
       return NextResponse.json(
-        { error: "message required" },
+        { error: "message ou images required" },
         { status: 400 }
       );
     }
 
-    const result = await chatWithAgent(params.id, body.message, user.id);
+    const result = await chatWithAgent(
+      params.id,
+      body.message ?? "",
+      user.id,
+      hasImages ? body.images : undefined
+    );
     return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json(

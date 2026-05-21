@@ -100,6 +100,88 @@ export default function Board({
     }
   }, [activeProjectId]);
 
+  // Polling proativo: a cada 15s consulta o status real das sessões e
+  // destrava cards presos (sessão ociosa no Claude mas card ainda "running").
+  // Isso mantém a tela atualizada mesmo quando o webhook do Anthropic não chega.
+  useEffect(() => {
+    let active = true;
+    const sb = createClient();
+
+    async function syncAndRefresh() {
+      try {
+        const res = await fetch("/api/cards/sync-running", { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!active) return;
+        // Se algum card foi destravado, recarrega os cards
+        if (data?.unlocked > 0 || true) {
+          let query = sb
+            .from("cards")
+            .select(
+              `id, stage, status, claude_session_id, updated_at,
+               feature:features!inner ( id, slug, title, github_repo, claude_environment_id, project_id ),
+               human_gates ( id, summary, decision, assignee_id )`
+            )
+            .order("updated_at", { ascending: false });
+          if (activeProjectId) {
+            query = query.eq("feature.project_id", activeProjectId);
+          }
+          const { data: cardsData } = await query;
+          if (active && cardsData) setCards(cardsData);
+        }
+      } catch {
+        // silencioso — é polling de fundo
+      }
+    }
+
+    const interval = setInterval(syncAndRefresh, 15000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [activeProjectId]);
+
+  // Polling proativo: a cada 20s consulta o status real das sessões dos cards
+  // "running" e destrava os que já estão ociosos no Claude (fallback caso o
+  // webhook não chegue). O realtime atualiza a UI quando algo muda.
+  useEffect(() => {
+    let stopped = false;
+
+    async function tick() {
+      const hasRunning = cards.some((c) => c.status === "running");
+      if (!hasRunning) return;
+      try {
+        const res = await fetch("/api/cards/sync-running", { method: "POST" });
+        const data = await res.json();
+        if (!stopped && data.synced && data.synced.length > 0) {
+          // força refresh imediato da lista
+          const sb = createClient();
+          let query = sb
+            .from("cards")
+            .select(
+              `id, stage, status, claude_session_id, updated_at,
+               feature:features!inner ( id, slug, title, github_repo, claude_environment_id, project_id ),
+               human_gates ( id, summary, decision, assignee_id )`
+            )
+            .order("updated_at", { ascending: false });
+          if (activeProjectId) query = query.eq("feature.project_id", activeProjectId);
+          const { data: fresh } = await query;
+          if (fresh && !stopped) setCards(fresh);
+        }
+      } catch {
+        // silencioso
+      }
+    }
+
+    const interval = setInterval(tick, 20000);
+    // primeira checagem após 5s
+    const initial = setTimeout(tick, 5000);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+      clearTimeout(initial);
+    };
+  }, [cards, activeProjectId]);
+
   // Dedup por feature: cada feature deve aparecer UMA vez, no stage mais
   // avançado. Cards órfãos (criados pela versão antiga que duplicava) são
   // colapsados aqui. Se o card mais avançado está cancelled, a feature inteira

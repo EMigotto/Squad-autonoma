@@ -622,7 +622,145 @@ function ProjectsSection() {
           ))}
         </div>
       )}
+
+      {/* Repositórios do projeto ativo */}
+      <ReposManager />
     </section>
+  );
+}
+
+function ReposManager() {
+  const [repos, setRepos] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newRepo, setNewRepo] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    const res = await fetch("/api/projects/repos");
+    const data = await res.json();
+    setRepos(data.repos ?? []);
+    setLoading(false);
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function addRepo() {
+    if (!newRepo.trim()) return;
+    setAdding(true);
+    setError("");
+    const res = await fetch("/api/projects/repos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ github_repo: newRepo.trim(), label: newLabel.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error ?? `HTTP ${res.status}`);
+    } else {
+      setNewRepo("");
+      setNewLabel("");
+      await load();
+    }
+    setAdding(false);
+  }
+
+  async function removeRepo(id: string) {
+    if (!confirm("remover este repositório do projeto?")) return;
+    const res = await fetch(`/api/projects/repos?id=${id}`, { method: "DELETE" });
+    if (res.ok) {
+      load();
+    } else {
+      const j = await res.json().catch(() => ({}));
+      alert("erro: " + (j.error ?? res.status));
+    }
+  }
+
+  return (
+    <div className="mt-6 pt-6 border-t border-ink-800">
+      <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
+        // repositórios do projeto ativo ({repos.length})
+      </div>
+      <div className="text-xs text-ink-400 mb-3 leading-relaxed">
+        Um projeto pode ter vários repositórios. Ao criar uma feature, você
+        escolhe em qual repo ela vai rodar.
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-ink-400">carregando...</div>
+      ) : (
+        <div className="space-y-2 mb-3">
+          {repos.length === 0 && (
+            <div className="text-xs text-ink-400 italic">
+              nenhum repositório ainda
+            </div>
+          )}
+          {repos.map((r) => (
+            <div
+              key={r.id}
+              className="flex items-center justify-between border border-ink-700 bg-ink-900/40 p-2"
+            >
+              <div>
+                <span className="text-sm text-ink-100 font-mono">
+                  {r.github_repo}
+                </span>
+                {r.label && r.label !== r.github_repo && (
+                  <span className="text-[11px] text-ink-400 ml-2">
+                    {r.label}
+                  </span>
+                )}
+                <span className="text-[10px] text-ink-400 ml-2">
+                  base: {r.default_base_branch}
+                </span>
+              </div>
+              <button
+                onClick={() => removeRepo(r.id)}
+                className="text-xs text-qa hover:underline px-2"
+              >
+                remover
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2 items-end">
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+            github repo (owner/repo)
+          </label>
+          <input
+            type="text"
+            value={newRepo}
+            onChange={(e) => setNewRepo(e.target.value)}
+            placeholder="ex: EMigotto/outro-repo"
+            className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+          />
+        </div>
+        <div className="flex-1 min-w-[150px]">
+          <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+            label (opcional)
+          </label>
+          <input
+            type="text"
+            value={newLabel}
+            onChange={(e) => setNewLabel(e.target.value)}
+            placeholder="ex: API"
+            className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+          />
+        </div>
+        <button
+          onClick={addRepo}
+          disabled={adding || !newRepo.trim()}
+          className="bg-development text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-development/80 disabled:opacity-50"
+        >
+          {adding ? "..." : "+ adicionar repo"}
+        </button>
+      </div>
+      {error && <div className="text-xs text-qa font-mono mt-2">{error}</div>}
+    </div>
   );
 }
 
