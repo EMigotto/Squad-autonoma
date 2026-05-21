@@ -1395,7 +1395,31 @@ function defaultKickoff(
   }
   if (stage === "qa") {
     return (
-      `Dev PRs for '${feature.slug}' merged. Write tests, run CI.` +
+      `Write and run the test suite for feature '${feature.slug}'.\n\n` +
+      `STEPS:\n` +
+      `1. Clone the repo with the credentials below.\n` +
+      `2. Read docs/features/${feature.slug}/acceptance-criteria.md — these are the ` +
+      `Gherkin scenarios from Discovery. EACH scenario must map to at least one ` +
+      `automated test.\n` +
+      `3. Check the integration state: list open PRs for this feature ` +
+      `(branches containing '${feature.slug}'). \n` +
+      `   - If the chunk PRs are ALREADY MERGED into ${settings.default_base_branch}, ` +
+      `test against that branch.\n` +
+      `   - If PRs are still OPEN (not merged), create an integration branch ` +
+      `feat/${feature.slug}/qa from ${settings.default_base_branch} and merge each ` +
+      `chunk branch into it so you have a complete codebase to test. If merges ` +
+      `conflict, report it clearly and stop.\n` +
+      `4. Write the test files using the project's test framework, covering every ` +
+      `acceptance criterion (aim for >=80% line coverage on new code). If prototypes ` +
+      `exist, add visual regression tests.\n` +
+      `5. Run lint, typecheck and the full test suite. Iterate until green for ` +
+      `issues that are YOUR test bugs.\n` +
+      `6. If a test reveals an IMPLEMENTATION bug (not a test bug), comment on the ` +
+      `relevant chunk PR/issue with the failing test and stack, apply label ` +
+      `status:bug, and report it — do NOT silently fix product code.\n` +
+      `7. Commit, push and open a DRAFT PR with the tests.\n` +
+      `8. End your turn with: coverage summary, scenarios covered, and any bugs found.\n\n` +
+      `Disable git commit signing with -c commit.gpgsign=false. Set a git identity.` +
       credBlock +
       workflowBlock +
       attachmentBlock

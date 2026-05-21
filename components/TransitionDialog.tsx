@@ -30,6 +30,12 @@ export default function TransitionDialog({
   const [error, setError] = useState("");
   const [showRaw, setShowRaw] = useState(false);
 
+  // Merge de PRs (quando a transição é development → qa)
+  const [pulls, setPulls] = useState<any[]>([]);
+  const [selectedPulls, setSelectedPulls] = useState<Set<number>>(new Set());
+  const [merging, setMerging] = useState(false);
+  const [mergeResult, setMergeResult] = useState<string>("");
+
   useEffect(() => {
     fetch(`/api/cards/${cardId}/preview-next`)
       .then((r) => r.json())
@@ -39,12 +45,69 @@ export default function TransitionDialog({
           setEditedMessage(data.initial_message);
         }
         setLoading(false);
+        // Se vamos pra QA, busca os PRs abertos pra oferecer merge
+        if (data.target_stage === "qa") {
+          fetch(`/api/cards/${cardId}/merge-prs`)
+            .then((r) => r.json())
+            .then((pd) => {
+              const open = pd.pulls ?? [];
+              setPulls(open);
+              setSelectedPulls(new Set(open.map((p: any) => p.number)));
+            })
+            .catch(() => {});
+        }
       })
       .catch((e) => {
         setError(String(e));
         setLoading(false);
       });
   }, [cardId]);
+
+  async function handleMergeSelected() {
+    const nums = Array.from(selectedPulls);
+    if (nums.length === 0) return;
+    setMerging(true);
+    setMergeResult("");
+    try {
+      const res = await fetch(`/api/cards/${cardId}/merge-prs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pr_numbers: nums }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMergeResult(`erro: ${data.error ?? res.status}`);
+      } else {
+        const fails = (data.results ?? []).filter(
+          (r: any) => r.status === "error"
+        );
+        setMergeResult(
+          `${data.merged}/${data.total} mergeado(s)` +
+            (fails.length
+              ? `. Falhas: ${fails
+                  .map((f: any) => `#${f.number} (${f.error})`)
+                  .join("; ")}`
+              : "")
+        );
+        // Recarrega a lista de PRs abertos
+        const pd = await fetch(`/api/cards/${cardId}/merge-prs`).then((r) =>
+          r.json()
+        );
+        const open = pd.pulls ?? [];
+        setPulls(open);
+        setSelectedPulls(new Set(open.map((p: any) => p.number)));
+      }
+    } finally {
+      setMerging(false);
+    }
+  }
+
+  function togglePull(num: number) {
+    const next = new Set(selectedPulls);
+    if (next.has(num)) next.delete(num);
+    else next.add(num);
+    setSelectedPulls(next);
+  }
 
   async function handleApprove() {
     setConfirming(true);
@@ -137,6 +200,74 @@ export default function TransitionDialog({
                   <div className="border border-planning/40 bg-planning/5 p-2 text-[11px] text-planning">
                     🔒 <strong>atenção:</strong> esta mensagem contém o GITHUB_TOKEN real (necessário pro agent autenticar). Não compartilhe screenshots desta tela em público.
                   </div>
+
+                  {/* Integração de PRs antes do QA */}
+                  {preview.target_stage === "qa" && (
+                    <div className="border border-development/40 bg-development/5 p-3">
+                      <div className="text-xs text-development font-semibold mb-1">
+                        integração antes do QA
+                      </div>
+                      <div className="text-[11px] text-ink-300 mb-2 leading-relaxed">
+                        O QA escreve os testes a partir do Gherkin, mas para rodar
+                        a suíte e ter CI verde o código precisa estar integrado.
+                        {pulls.length > 0
+                          ? " Mergeie os PRs dos chunks agora, ou avance sem mergear (o QA escreverá testes que podem falhar por falta de código)."
+                          : " Nenhum PR aberto encontrado para esta feature."}
+                      </div>
+
+                      {pulls.length > 0 && (
+                        <>
+                          <div className="space-y-1 mb-2">
+                            {pulls.map((pr) => (
+                              <label
+                                key={pr.number}
+                                className="flex items-center gap-2 text-xs cursor-pointer"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedPulls.has(pr.number)}
+                                  onChange={() => togglePull(pr.number)}
+                                  className="accent-development"
+                                />
+                                {pr.draft && (
+                                  <span className="text-[9px] uppercase text-planning border border-planning/40 px-1">
+                                    draft
+                                  </span>
+                                )}
+                                <span className="text-ink-100 truncate flex-1">
+                                  #{pr.number} {pr.title}
+                                </span>
+                                <a
+                                  href={pr.html_url}
+                                  target="_blank"
+                                  rel="noopener"
+                                  className="text-development hover:underline shrink-0"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  ↗
+                                </a>
+                              </label>
+                            ))}
+                          </div>
+                          <button
+                            onClick={handleMergeSelected}
+                            disabled={merging || selectedPulls.size === 0}
+                            className="bg-development text-ink-950 px-3 py-1 text-xs font-semibold hover:bg-development/80 disabled:opacity-50"
+                          >
+                            {merging
+                              ? "mergeando..."
+                              : `mergear ${selectedPulls.size} PR(s) selecionado(s)`}
+                          </button>
+                        </>
+                      )}
+
+                      {mergeResult && (
+                        <div className="text-[11px] text-ink-300 mt-2 font-mono">
+                          {mergeResult}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <div>
                     <div className="flex items-center justify-between mb-2">
