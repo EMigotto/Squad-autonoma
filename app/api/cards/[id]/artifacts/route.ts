@@ -47,19 +47,29 @@ export async function GET(
 
     const branches = await tryBranches(repo, slug, token);
 
-    // Arquivos no branch (prd.md, adr.md, acceptance-criteria.md, prototypes)
-    let files: Array<{ name: string; path: string; type: string; size: number }> =
-      [];
-    let primary: string | undefined;
-    if (branches.length) {
-      primary = branches[0];
-      files = await listFilesRecursive(
+    // Coleta arquivos de TODOS os branches encontrados (spec, plan, etc),
+    // deduplicando por path. Isso garante que o adr.md (gerado pelo Tech Lead
+    // no branch de planning) apareça junto com o prd.md (do PM no branch spec).
+    const fileMap = new Map<
+      string,
+      { name: string; path: string; type: string; size: number; branch: string }
+    >();
+    for (const br of branches) {
+      const brFiles = await listFilesRecursive(
         repo,
         `docs/features/${slug}`,
-        primary,
+        br,
         token
       );
+      for (const f of brFiles) {
+        // mantém a primeira ocorrência (branch de maior prioridade na ordem)
+        if (!fileMap.has(f.path)) {
+          fileMap.set(f.path, { ...f, branch: br });
+        }
+      }
     }
+    const files = Array.from(fileMap.values());
+    const primary = branches[0];
 
     // Chunks = sub-issues com label feat:<slug>
     const chunks = await listIssues(repo, slug, token);

@@ -233,7 +233,10 @@ export default function CreateFeatureDialog({
             {field("slug", "slug", "ex: dark-mode-toggle")}
             {field("title", "título", "ex: Dark mode no app")}
             {field("description", "descrição", "O que precisa ser feito?", true)}
-            {field("github_repo", "github repo", "owner/repo")}
+            <div className="text-[11px] text-ink-400 border border-ink-800 bg-ink-900/40 p-2">
+              o repositório será o configurado no projeto ativo. Pra alterar, vá
+              em /settings → projeto.
+            </div>
             {field(
               "github_parent_issue",
               "parent issue # (opcional)",

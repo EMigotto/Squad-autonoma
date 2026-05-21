@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { createFeature, kickoffFirstStage } from "@/lib/orchestrator";
+import { getActiveProjectId, getProject } from "@/lib/projects";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -26,7 +27,7 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const required = ["slug", "title", "description", "github_repo"];
+    const required = ["slug", "title", "description"];
     for (const k of required) {
       if (!body[k]) {
         return NextResponse.json(
@@ -34,6 +35,24 @@ export async function POST(req: Request) {
           { status: 400 }
         );
       }
+    }
+
+    // Resolve o projeto ativo e seu repositório
+    const projectId = await getActiveProjectId(user.id);
+    if (!projectId) {
+      return NextResponse.json(
+        { error: "nenhum projeto ativo. Crie/selecione um projeto em /settings." },
+        { status: 400 }
+      );
+    }
+    const project = await getProject(projectId);
+    // Usa o repo do projeto, com fallback pro body (compat)
+    const githubRepo = project?.github_repo ?? body.github_repo;
+    if (!githubRepo) {
+      return NextResponse.json(
+        { error: "projeto sem github_repo configurado" },
+        { status: 400 }
+      );
     }
 
     const attachmentPaths: string[] = Array.isArray(body.attachment_paths)
@@ -49,8 +68,9 @@ export async function POST(req: Request) {
         slug: body.slug,
         title: body.title,
         description: body.description,
-        github_repo: body.github_repo,
+        github_repo: githubRepo,
         github_parent_issue: body.github_parent_issue ?? 0,
+        project_id: projectId,
         created_by: user.id,
       });
 

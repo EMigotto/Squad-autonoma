@@ -1,6 +1,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Board from "@/components/Board";
+import { getActiveProjectId } from "@/lib/projects";
 
 // Stages estáticos como fallback se a query falhar
 const FALLBACK_STAGES = [
@@ -25,8 +26,15 @@ export default async function BoardPage() {
     .eq("id", user.id)
     .single();
 
-  // Usa service role para stages — evita problemas de RLS no startup
   const svc = createServiceClient();
+
+  // Projeto ativo + lista de projetos pro seletor
+  const activeProjectId = await getActiveProjectId(user.id);
+  const { data: projects } = await svc
+    .from("projects")
+    .select("id, name, sigla, github_repo")
+    .order("created_at", { ascending: true });
+
   const { data: stagesData, error: stagesErr } = await svc
     .from("stages")
     .select("*")
@@ -35,24 +43,30 @@ export default async function BoardPage() {
   const stages =
     stagesData && stagesData.length > 0 ? stagesData : FALLBACK_STAGES;
 
-  // Cards via cliente normal (RLS authenticated)
-  const { data: cardsData, error: cardsErr } = await sb
-    .from("cards")
-    .select(
-      `id, stage, status, claude_session_id, updated_at,
-       feature:features ( id, slug, title, github_repo, claude_environment_id ),
-       human_gates ( id, summary, decision, assignee_id )`
-    )
-    .order("updated_at", { ascending: false });
+  // Cards filtrados pelo projeto ativo (via feature.project_id)
+  let cards: any[] = [];
+  let cardsErr: any = null;
+  if (activeProjectId) {
+    const { data: cardsData, error } = await sb
+      .from("cards")
+      .select(
+        `id, stage, status, claude_session_id, updated_at,
+         feature:features!inner ( id, slug, title, github_repo, claude_environment_id, project_id ),
+         human_gates ( id, summary, decision, assignee_id )`
+      )
+      .eq("feature.project_id", activeProjectId)
+      .order("updated_at", { ascending: false });
+    cards = cardsData ?? [];
+    cardsErr = error;
+  }
 
-  const cards = cardsData ?? [];
-
-  // Settings — pra propagar pro Board e mostrar avisos
+  // Settings do projeto ativo
   const { data: settings } = await svc
     .from("app_settings")
     .select("*")
-    .eq("id", 1)
-    .single();
+    .eq("project_id", activeProjectId)
+    .limit(1)
+    .maybeSingle();
 
   return (
     <Board
@@ -64,10 +78,13 @@ export default async function BoardPage() {
       initialStages={stages}
       initialCards={cards}
       settings={settings}
+      projects={projects ?? []}
+      activeProjectId={activeProjectId}
       diagnostics={{
         stagesError: stagesErr?.message,
         cardsError: cardsErr?.message,
         stagesFromFallback: !stagesData || stagesData.length === 0,
+        noProject: !activeProjectId,
       }}
     />
   );

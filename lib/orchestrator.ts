@@ -24,13 +24,15 @@ function normalizeSlug(s: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-async function getAppSettings() {
+async function getAppSettings(projectId?: string) {
   const sb = createServiceClient();
-  const { data } = await sb
-    .from("app_settings")
-    .select("*")
-    .eq("id", 1)
-    .single();
+  let query = sb.from("app_settings").select("*");
+  if (projectId) {
+    query = query.eq("project_id", projectId);
+  } else {
+    query = query.eq("id", 1);
+  }
+  const { data } = await query.limit(1).maybeSingle();
   return (
     data ?? {
       auto_merge_prs: false,
@@ -43,30 +45,35 @@ async function getAppSettings() {
 }
 
 /**
- * Pega o agent que deve rodar para uma stage.
+ * Pega o agent que deve rodar para uma stage NO PROJETO indicado.
  * Pega o primeiro enabled por sort_order na agent_definitions, e o claude_agent_id
  * correspondente em agents.
  */
-async function getAgentForStage(stage: string) {
+async function getAgentForStage(stage: string, projectId: string) {
   const sb = createServiceClient();
   const { data: def } = await sb
     .from("agent_definitions")
     .select("*")
+    .eq("project_id", projectId)
     .eq("stage", stage)
     .eq("enabled", true)
     .order("sort_order", { ascending: true })
     .limit(1)
-    .single();
-  if (!def) throw new Error(`no enabled agent for stage ${stage}`);
+    .maybeSingle();
+  if (!def)
+    throw new Error(`no enabled agent for stage ${stage} in this project`);
 
   const { data: deployed } = await sb
     .from("agents")
     .select("*")
+    .eq("project_id", projectId)
     .eq("role", def.role)
     .eq("is_current", true)
-    .single();
+    .maybeSingle();
   if (!deployed)
-    throw new Error(`agent ${def.role} defined but not deployed; run /admin/setup`);
+    throw new Error(
+      `agent ${def.role} defined but not deployed; run /admin/setup`
+    );
 
   return { def, deployed };
 }
@@ -144,8 +151,6 @@ export async function previewKickoff(
     .single();
   if (!card) throw new Error(`card ${cardId} not found`);
 
-  const { def, deployed } = await getAgentForStage(targetStage);
-
   const { data: feature } = await sb
     .from("features")
     .select("*")
@@ -153,8 +158,13 @@ export async function previewKickoff(
     .single();
   if (!feature) throw new Error("feature not found");
 
+  const { def, deployed } = await getAgentForStage(
+    targetStage,
+    feature.project_id
+  );
+
   const attachments = await fetchAttachmentContents(card.feature_id);
-  const settings = await getAppSettings();
+  const settings = await getAppSettings(feature.project_id);
 
   const initial_message = defaultKickoff(
     { ...card, stage: targetStage },
@@ -189,11 +199,11 @@ export async function startStage(
   if (cardErr || !card) throw new Error(`card ${cardId} not found`);
 
   const stage = card.stage as StageCode;
-  const { def, deployed } = await getAgentForStage(stage);
 
   const feature = await ensureFeatureEnvironment(card.feature_id);
+  const { def, deployed } = await getAgentForStage(stage, feature.project_id);
   const attachments = await fetchAttachmentContents(card.feature_id);
-  const settings = await getAppSettings();
+  const settings = await getAppSettings(feature.project_id);
 
   let userMsg: string;
   if (initialMessage) {
@@ -552,6 +562,16 @@ export async function moveCardToStage(
     return;
   }
 
+  // Reabrir: se a feature estava concluída/cancelada, limpa o estado terminal
+  await sb
+    .from("features")
+    .update({
+      cancelled_at: null,
+      cancelled_reason: null,
+      completed_early_at: null,
+    })
+    .eq("id", card.feature_id);
+
   // Move o card
   await sb
     .from("cards")
@@ -783,6 +803,7 @@ export async function createFeature(input: {
   description: string;
   github_repo: string;
   github_parent_issue: number;
+  project_id: string;
   created_by?: string;
 }): Promise<{ feature_id: string; card_id: string }> {
   const sb = createServiceClient();
@@ -961,7 +982,7 @@ export async function startNextChunk(cardId: string): Promise<void> {
   const sb = createServiceClient();
   const { data: card } = await sb
     .from("cards")
-    .select("*, feature:features(id, slug, github_repo, github_parent_issue, description, claude_environment_id)")
+    .select("*, feature:features(id, slug, github_repo, github_parent_issue, description, claude_environment_id, project_id)")
     .eq("id", cardId)
     .single();
   if (!card) throw new Error("card not found");
@@ -1011,14 +1032,15 @@ export async function startNextChunk(cardId: string): Promise<void> {
     return;
   }
 
-  // Escolhe o Dev Agent pelo skill do chunk
+  // Escolhe o Dev Agent pelo skill do chunk (no projeto da feature)
   const role = SKILL_TO_ROLE[nextChunk.skill] ?? "dev_backend";
   const { data: agentDef } = await sb
     .from("agent_definitions")
     .select("*")
+    .eq("project_id", feature.project_id)
     .eq("role", role)
     .eq("enabled", true)
-    .single();
+    .maybeSingle();
 
   // Fallback: se o role específico não existe/desabilitado, pega qualquer dev de development
   let chosenDef = agentDef;
@@ -1026,11 +1048,12 @@ export async function startNextChunk(cardId: string): Promise<void> {
     const { data: anyDev } = await sb
       .from("agent_definitions")
       .select("*")
+      .eq("project_id", feature.project_id)
       .eq("stage", "development")
       .eq("enabled", true)
       .order("sort_order", { ascending: true })
       .limit(1)
-      .single();
+      .maybeSingle();
     chosenDef = anyDev;
   }
   if (!chosenDef) throw new Error("nenhum Dev Agent habilitado em development");
@@ -1038,16 +1061,17 @@ export async function startNextChunk(cardId: string): Promise<void> {
   const { data: deployed } = await sb
     .from("agents")
     .select("*")
+    .eq("project_id", feature.project_id)
     .eq("role", chosenDef.role)
     .eq("is_current", true)
-    .single();
+    .maybeSingle();
   if (!deployed)
     throw new Error(`Dev Agent ${chosenDef.role} não deployado; rode /admin/setup`);
 
   // Garante environment
   const feat = await ensureFeatureEnvironment(feature.id);
   const attachments = await fetchAttachmentContents(feature.id);
-  const settings = await getAppSettings();
+  const settings = await getAppSettings(feature.project_id);
 
   // Marca chunk como in_progress
   await sb
@@ -1317,9 +1341,26 @@ function defaultKickoff(
   }
   if (stage === "planning") {
     return (
-      `The PM PR for '${feature.slug}' has been merged.\n` +
-      `Read docs/features/${feature.slug}/prd.md, acceptance-criteria.md, prototypes.\n` +
-      `Produce ADR and decompose into chunks. Parent issue: #${feature.github_parent_issue}.` +
+      `Plan the technical implementation for feature '${feature.slug}'.\n\n` +
+      `STEPS:\n` +
+      `1. Clone the repo with the credentials below.\n` +
+      `2. Read docs/features/${feature.slug}/prd.md, acceptance-criteria.md and any prototypes.\n` +
+      `3. Create branch feat/${feature.slug}/plan from ${settings.default_base_branch}.\n` +
+      `4. WRITE the ADR as a document at docs/features/${feature.slug}/adr.md — ` +
+      `include: context, decision drivers, the chosen architecture with rationale, ` +
+      `alternatives considered, and consequences. This is the technical SPEC of the feature.\n` +
+      `5. Decompose the work into chunks. For EACH chunk create a GitHub sub-issue via the REST API:\n` +
+      `   - Title prefixed with the skill: [backend], [frontend] or [infra]\n` +
+      `   - Body: scope, files affected, dependencies, which acceptance criteria it covers\n` +
+      `   - Labels: skill:<backend|frontend|infra>, feat:${feature.slug}, status:planned\n` +
+      `   - Every acceptance criterion must be covered by at least one chunk.\n` +
+      `6. Also write docs/features/${feature.slug}/build-order.md listing the recommended ` +
+      `order to implement the chunks (with the issue numbers).\n` +
+      `7. Commit, push the branch and open a DRAFT PR.\n` +
+      `8. End your turn with: the ADR summary, the list of chunks created (with issue numbers) ` +
+      `and the recommended build order.\n\n` +
+      `Parent issue: #${feature.github_parent_issue}. ` +
+      `Disable git commit signing with -c commit.gpgsign=false. Set a git identity before committing.` +
       credBlock +
       workflowBlock +
       attachmentBlock

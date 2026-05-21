@@ -23,10 +23,13 @@ interface Props {
   initialStages: { code: string; label: string; sort_order: number }[];
   initialCards: any[];
   settings: any;
+  projects?: { id: string; name: string; sigla: string; github_repo: string | null }[];
+  activeProjectId?: string | null;
   diagnostics?: {
     stagesError?: string;
     cardsError?: string;
     stagesFromFallback?: boolean;
+    noProject?: boolean;
   };
 }
 
@@ -43,6 +46,8 @@ export default function Board({
   initialStages,
   initialCards,
   settings,
+  projects = [],
+  activeProjectId,
   diagnostics,
 }: Props) {
   const [cards, setCards] = useState(initialCards);
@@ -79,17 +84,21 @@ export default function Board({
     };
 
     async function refresh() {
-      const { data } = await sb
+      let query = sb
         .from("cards")
         .select(
           `id, stage, status, claude_session_id, updated_at,
-           feature:features ( id, slug, title, github_repo, claude_environment_id ),
+           feature:features!inner ( id, slug, title, github_repo, claude_environment_id, project_id ),
            human_gates ( id, summary, decision, assignee_id )`
         )
         .order("updated_at", { ascending: false });
+      if (activeProjectId) {
+        query = query.eq("feature.project_id", activeProjectId);
+      }
+      const { data } = await query;
       if (data) setCards(data);
     }
-  }, []);
+  }, [activeProjectId]);
 
   // Dedup por feature: cada feature deve aparecer UMA vez, no stage mais
   // avançado. Cards órfãos (criados pela versão antiga que duplicava) são
@@ -185,6 +194,17 @@ export default function Board({
     setTransitionCardId(card.id);
   }
 
+  async function handleProjectChange(projectId: string) {
+    await fetch("/api/projects/active", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project_id: projectId }),
+    });
+    window.location.reload();
+  }
+
+  const activeProject = projects.find((p) => p.id === activeProjectId);
+
   const totalCards = activeCards.length;
   const openGates = activeCards.filter((c) =>
     c.human_gates?.some(
@@ -205,7 +225,35 @@ export default function Board({
               <span className="text-ink-400"> · {currentUser.role}</span>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-xs text-ink-400 ml-4">
+
+          {/* Seletor de projeto */}
+          <div className="flex items-center gap-2 border-l border-ink-700 pl-6">
+            <span className="text-[10px] uppercase tracking-widest text-ink-400">
+              projeto
+            </span>
+            {projects.length > 0 ? (
+              <select
+                value={activeProjectId ?? ""}
+                onChange={(e) => handleProjectChange(e.target.value)}
+                className="bg-ink-900 border border-ink-700 px-2 py-1 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+              >
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    [{p.sigla}] {p.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Link
+                href="/settings"
+                className="text-xs text-planning hover:underline"
+              >
+                criar projeto →
+              </Link>
+            )}
+          </div>
+
+          <div className="flex items-center gap-4 text-xs text-ink-400">
             <span>
               <span className="text-ink-100">{totalCards}</span> ativos
             </span>
@@ -245,6 +293,15 @@ export default function Board({
         </div>
       </header>
 
+      {diagnostics?.noProject && (
+        <div className="border-b border-planning bg-planning/10 px-6 py-2 text-xs text-planning font-mono">
+          ⚠ nenhum projeto ativo. Crie um projeto em{" "}
+          <Link href="/settings" className="underline">
+            /settings
+          </Link>{" "}
+          para começar.
+        </div>
+      )}
       {diagnostics?.stagesError && (
         <div className="border-b border-qa bg-qa/10 px-6 py-2 text-xs text-qa font-mono">
           aviso: erro ao carregar stages — {diagnostics.stagesError}. Usando fallback.

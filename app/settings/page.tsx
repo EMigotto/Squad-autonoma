@@ -208,6 +208,9 @@ export default function SettingsPage() {
           </Link>
         </div>
 
+        {/* PROJETOS */}
+        <ProjectsSection />
+
         {/* WORKFLOW DIAGRAM */}
         <section>
           <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
@@ -444,6 +447,182 @@ export default function SettingsPage() {
         />
       )}
     </main>
+  );
+}
+
+function ProjectsSection() {
+  const [projects, setProjects] = useState<any[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    sigla: "",
+    github_repo: "",
+    default_base_branch: "main",
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    const res = await fetch("/api/projects");
+    const data = await res.json();
+    setProjects(data.projects ?? []);
+    setActiveId(data.active_project_id ?? null);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function createProject() {
+    if (!form.name.trim() || !form.sigla.trim()) {
+      setError("nome e sigla são obrigatórios");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    const res = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error ?? `HTTP ${res.status}`);
+      setSaving(false);
+      return;
+    }
+    // Ativa o projeto recém-criado e roda o setup de agentes nele
+    await fetch("/api/projects/active", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project_id: data.project.id }),
+    });
+    await fetch("/api/admin/setup-agents", { method: "POST" });
+    window.location.reload();
+  }
+
+  async function activate(id: string) {
+    await fetch("/api/projects/active", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project_id: id }),
+    });
+    window.location.reload();
+  }
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm uppercase tracking-widest text-ink-400">
+          // times e projetos
+        </h2>
+        <button
+          onClick={() => setCreating(!creating)}
+          className="bg-ink-100 text-ink-950 px-3 py-1.5 text-xs font-semibold hover:bg-ink-300 transition-colors"
+        >
+          {creating ? "fechar" : "+ novo projeto"}
+        </button>
+      </div>
+
+      <div className="text-xs text-ink-400 mb-4 leading-relaxed">
+        Cada projeto tem nome, sigla e repositório próprios, e carrega suas
+        próprias configurações de agentes e settings. Trocar de projeto no
+        seletor do board muda todo o contexto.
+      </div>
+
+      {creating && (
+        <div className="border border-ink-700 bg-ink-900/40 p-4 mb-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <SimpleField
+              label="nome do projeto"
+              value={form.name}
+              onChange={(v) => setForm({ ...form, name: v })}
+              placeholder="ex: Certificado Digital"
+            />
+            <SimpleField
+              label="sigla"
+              value={form.sigla}
+              onChange={(v) => setForm({ ...form, sigla: v })}
+              placeholder="ex: CERT"
+            />
+            <SimpleField
+              label="github repo"
+              value={form.github_repo}
+              onChange={(v) => setForm({ ...form, github_repo: v })}
+              placeholder="owner/repo"
+            />
+            <SimpleField
+              label="branch base"
+              value={form.default_base_branch}
+              onChange={(v) => setForm({ ...form, default_base_branch: v })}
+              placeholder="main"
+            />
+          </div>
+          {error && (
+            <div className="text-xs text-qa font-mono">{error}</div>
+          )}
+          <div className="text-[10px] text-ink-400">
+            ao criar, os 7 agentes builtin são semeados e deployados
+            automaticamente neste projeto.
+          </div>
+          <button
+            onClick={createProject}
+            disabled={saving}
+            className="bg-discovery text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-discovery/80 disabled:opacity-50"
+          >
+            {saving ? "criando + deployando agentes..." : "criar projeto"}
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-xs text-ink-400">carregando projetos...</div>
+      ) : projects.length === 0 ? (
+        <div className="text-xs text-ink-400 italic border border-dashed border-ink-800 p-4">
+          nenhum projeto ainda. Crie o primeiro acima.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {projects.map((p) => (
+            <div
+              key={p.id}
+              className={`border p-3 flex items-center justify-between ${
+                p.id === activeId
+                  ? "border-discovery bg-discovery/5"
+                  : "border-ink-700 bg-ink-900/40"
+              }`}
+            >
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] uppercase tracking-widest text-discovery border border-discovery/40 px-1.5 py-0.5">
+                    {p.sigla}
+                  </span>
+                  <span className="text-sm font-semibold">{p.name}</span>
+                  {p.id === activeId && (
+                    <span className="text-[10px] text-discovery">● ativo</span>
+                  )}
+                </div>
+                <div className="text-[11px] text-ink-400 mt-1 font-mono">
+                  {p.github_repo ?? "sem repo"}
+                  {p.team?.name && ` · time: ${p.team.name}`}
+                </div>
+              </div>
+              {p.id !== activeId && (
+                <button
+                  onClick={() => activate(p.id)}
+                  className="text-xs text-development hover:underline px-2"
+                >
+                  ativar
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

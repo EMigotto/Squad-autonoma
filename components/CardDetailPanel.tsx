@@ -31,6 +31,7 @@ interface ArtifactFile {
   path: string;
   type: string;
   size: number;
+  branch?: string;
 }
 
 interface ChunkIssue {
@@ -187,7 +188,7 @@ export default function CardDetailPanel({
     });
     const url = `/api/cards/${cardId}/artifacts/file?path=${encodeURIComponent(
       file.path
-    )}&branch=${encodeURIComponent(artifacts.branch ?? "main")}`;
+    )}&branch=${encodeURIComponent(file.branch ?? artifacts.branch ?? "main")}`;
     const res = await fetch(url);
     const data = await res.json();
     setOpenArtifact({
@@ -670,9 +671,34 @@ export default function CardDetailPanel({
             )}
 
             {isTerminal && (
-              <div className="text-xs text-ink-400 italic">
-                Esta feature está em estado terminal ({card.status}).
-              </div>
+              <Section title="card finalizado">
+                <div className="text-xs text-ink-400 mb-3">
+                  Esta feature está em estado terminal (
+                  <span className="font-mono">{card.status}</span>). Você pode
+                  reabri-la movendo para uma etapa — isso limpa o estado de
+                  conclusão/cancelamento e dispara o agente da etapa escolhida.
+                </div>
+                <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
+                  reabrir em etapa
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { code: "discovery", label: "Discovery" },
+                    { code: "planning", label: "Planejamento Técnico" },
+                    { code: "development", label: "Desenvolvimento" },
+                    { code: "qa", label: "Qualidade" },
+                  ].map((s) => (
+                    <button
+                      key={s.code}
+                      onClick={() => handleMove(s.code)}
+                      disabled={actionLoading}
+                      className="px-2.5 py-1 text-xs border border-ink-700 text-ink-200 hover:border-ink-500 hover:text-ink-100 transition-colors disabled:opacity-40"
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </Section>
             )}
           </div>
         </div>
@@ -923,7 +949,8 @@ function fileStage(name: string, path: string): string {
     p.includes("prototypes/")
   )
     return "discovery";
-  if (n.includes("adr")) return "planning";
+  if (n.includes("adr") || n.includes("build-order") || n.includes("build_order"))
+    return "planning";
   if (
     n.includes("test") ||
     n.includes(".spec.") ||

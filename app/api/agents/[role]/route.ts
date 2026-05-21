@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { beta } from "@/lib/claude";
 import { buildClaudeSpec, hashPrompt } from "@/lib/agents";
+import { getActiveProjectId } from "@/lib/projects";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -18,21 +19,25 @@ export async function PATCH(
     if (!user)
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
+    const projectId = await getActiveProjectId(user.id);
+    if (!projectId)
+      return NextResponse.json({ error: "nenhum projeto ativo" }, { status: 400 });
+
     const body = await req.json();
     const svc = createServiceClient();
 
     const { data: existing } = await svc
       .from("agent_definitions")
       .select("*")
+      .eq("project_id", projectId)
       .eq("role", params.role)
-      .single();
-
-    if (!existing) {
+      .maybeSingle();
+    if (!existing)
       return NextResponse.json({ error: "agent not found" }, { status: 404 });
-    }
 
-    // Constrói patch (só campos editáveis)
-    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    const patch: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    };
     const editable = [
       "name",
       "stage",
@@ -42,22 +47,18 @@ export async function PATCH(
       "enabled",
       "description",
     ];
-    for (const k of editable) {
-      if (k in body) patch[k] = body[k];
-    }
+    for (const k of editable) if (k in body) patch[k] = body[k];
 
     const { data: updated, error } = await svc
       .from("agent_definitions")
       .update(patch)
+      .eq("project_id", projectId)
       .eq("role", params.role)
       .select()
       .single();
-
-    if (error) {
+    if (error)
       return NextResponse.json({ error: error.message }, { status: 500 });
-    }
 
-    // Se o system_prompt mudou, faz deploy ao Claude
     let deployResult: any = { action: "skipped" };
     if (body.system_prompt && body.system_prompt !== existing.system_prompt) {
       try {
@@ -69,9 +70,10 @@ export async function PATCH(
         const { data: currentDeploy } = await svc
           .from("agents")
           .select("claude_agent_id, claude_agent_version")
+          .eq("project_id", projectId)
           .eq("role", params.role)
           .eq("is_current", true)
-          .single();
+          .maybeSingle();
 
         if (currentDeploy) {
           const agent = await beta.agents.update(currentDeploy.claude_agent_id, {
@@ -81,8 +83,10 @@ export async function PATCH(
           await svc
             .from("agents")
             .update({ is_current: false })
+            .eq("project_id", projectId)
             .eq("role", params.role);
           await svc.from("agents").insert({
+            project_id: projectId,
             role: params.role,
             claude_agent_id: agent.id,
             claude_agent_version: agent.version,
@@ -90,9 +94,9 @@ export async function PATCH(
           });
           deployResult = { action: "updated", id: agent.id, version: agent.version };
         } else {
-          // Não tem deploy ainda — cria
           const agent = await beta.agents.create(spec);
           await svc.from("agents").insert({
+            project_id: projectId,
             role: params.role,
             claude_agent_id: agent.id,
             claude_agent_version: agent.version ?? 1,
@@ -129,47 +133,35 @@ export async function DELETE(
     if (!user)
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-    const svc = createServiceClient();
+    const projectId = await getActiveProjectId(user.id);
+    if (!projectId)
+      return NextResponse.json({ error: "nenhum projeto ativo" }, { status: 400 });
 
+    const svc = createServiceClient();
     const { data: existing } = await svc
       .from("agent_definitions")
       .select("is_builtin")
+      .eq("project_id", projectId)
       .eq("role", params.role)
-      .single();
-
-    if (!existing) {
+      .maybeSingle();
+    if (!existing)
       return NextResponse.json({ error: "not found" }, { status: 404 });
-    }
-    if (existing.is_builtin) {
+    if (existing.is_builtin)
       return NextResponse.json(
         { error: "agentes builtin não podem ser deletados, só desabilitados" },
         { status: 403 }
       );
-    }
 
-    // Arquiva no Claude se aplicável
-    try {
-      const { data: deployed } = await svc
-        .from("agents")
-        .select("claude_agent_id")
-        .eq("role", params.role)
-        .eq("is_current", true)
-        .single();
-      if (deployed) {
-        // beta.agents.archive(...) — se a API tiver isso. Se não, só removemos
-        // do nosso DB e o agent fica órfão no Claude (sem impacto).
-        try {
-          await beta.agents.archive(deployed.claude_agent_id);
-        } catch {
-          // ignora se não suportado
-        }
-      }
-    } catch {
-      // ok
-    }
-
-    await svc.from("agents").delete().eq("role", params.role);
-    await svc.from("agent_definitions").delete().eq("role", params.role);
+    await svc
+      .from("agents")
+      .delete()
+      .eq("project_id", projectId)
+      .eq("role", params.role);
+    await svc
+      .from("agent_definitions")
+      .delete()
+      .eq("project_id", projectId)
+      .eq("role", params.role);
 
     return NextResponse.json({ status: "deleted" });
   } catch (e) {
