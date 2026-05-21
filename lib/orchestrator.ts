@@ -262,6 +262,58 @@ export async function startStage(
 }
 
 // ============================================================
+// resolveConflictsWithAgent: dispara o Dev Agent pra integrar os PRs
+// dos chunks numa branch de integração, resolvendo conflitos de merge.
+// ============================================================
+export async function resolveConflictsWithAgent(
+  cardId: string
+): Promise<{ session_id: string }> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*, feature:features(slug, github_repo, project_id)")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error("card not found");
+  const feature = card.feature as any;
+  const token = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
+  const settings = await getAppSettings(feature.project_id);
+  const base = settings.default_base_branch ?? "main";
+  const integrationBranch = `feat/${feature.slug}/integration`;
+
+  const prompt =
+    `Your task is to INTEGRATE the open chunk Pull Requests for feature ` +
+    `'${feature.slug}' into a single conflict-free branch, resolving any merge ` +
+    `conflicts.\n\n` +
+    `STEPS:\n` +
+    `1. Clone the repo.\n` +
+    `2. List the open PRs whose head branch contains '${feature.slug}'.\n` +
+    `3. Create an integration branch '${integrationBranch}' from '${base}'.\n` +
+    `4. Merge each chunk branch into '${integrationBranch}', one at a time, in ` +
+    `issue/chunk order. When a merge conflict occurs, RESOLVE it preserving the ` +
+    `intended behavior of EVERY chunk — never discard a chunk's functionality. ` +
+    `If two chunks change the same code, integrate both changes coherently.\n` +
+    `5. After each resolution, ensure the project still builds and lints.\n` +
+    `6. Push '${integrationBranch}' and open a SINGLE pull request from it into ` +
+    `'${base}', titled "feat(${feature.slug}): integração dos chunks", with a body ` +
+    `listing which PRs/issues it consolidates and how conflicts were resolved.\n` +
+    `7. Do NOT merge it yourself — leave it open for human review.\n` +
+    `8. End your turn with: the integration PR number/URL, the list of conflicts ` +
+    `you resolved, and any risk worth a closer look in review.\n\n` +
+    `--- GitHub credentials ---\n` +
+    `Repo: ${feature.github_repo}\n` +
+    `Token: ${token}\n` +
+    `Clone URL: https://x-access-token:${token}@github.com/${feature.github_repo}.git\n` +
+    `API auth header: Authorization: token ${token}\n` +
+    `Base branch: ${base}\n---\n` +
+    `Disable git commit signing with -c commit.gpgsign=false. Set a git identity.`;
+
+  // Reusa startStage (mesma etapa development, Dev Agent), com prompt custom.
+  const sessionId = await startStage(cardId, prompt);
+  return { session_id: sessionId };
+}
+
+// ============================================================
 // chatWithAgent: continua conversa em sessão existente
 // ============================================================
 export async function chatWithAgent(
@@ -1407,8 +1459,9 @@ function defaultKickoff(
       `test against that branch.\n` +
       `   - If PRs are still OPEN (not merged), create an integration branch ` +
       `feat/${feature.slug}/qa from ${settings.default_base_branch} and merge each ` +
-      `chunk branch into it so you have a complete codebase to test. If merges ` +
-      `conflict, report it clearly and stop.\n` +
+      `chunk branch into it. If a merge CONFLICTS, RESOLVE the conflict preserving ` +
+      `the intended behavior of every chunk (never discard a chunk's functionality), ` +
+      `then continue — only stop and report if a conflict is genuinely unresolvable.\n` +
       `4. Write the test files using the project's test framework, covering every ` +
       `acceptance criterion (aim for >=80% line coverage on new code). If prototypes ` +
       `exist, add visual regression tests.\n` +

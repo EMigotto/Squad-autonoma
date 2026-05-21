@@ -35,6 +35,31 @@ export default function TransitionDialog({
   const [selectedPulls, setSelectedPulls] = useState<Set<number>>(new Set());
   const [merging, setMerging] = useState(false);
   const [mergeResult, setMergeResult] = useState<string>("");
+  const [resolving, setResolving] = useState(false);
+
+  // Detecta se o último merge reportou conflitos
+  const hasConflicts = /conflict/i.test(mergeResult);
+
+  async function handleResolveConflicts() {
+    setResolving(true);
+    try {
+      const res = await fetch(`/api/cards/${cardId}/resolve-conflicts`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMergeResult(`erro ao disparar resolução: ${data.error ?? res.status}`);
+        setResolving(false);
+        return;
+      }
+      // O Dev Agent foi disparado pra integrar e resolver os conflitos.
+      onClose();
+      window.location.reload();
+    } catch (e) {
+      setMergeResult(String(e));
+      setResolving(false);
+    }
+  }
 
   useEffect(() => {
     fetch(`/api/cards/${cardId}/preview-next`)
@@ -264,6 +289,56 @@ export default function TransitionDialog({
                       {mergeResult && (
                         <div className="text-[11px] text-ink-300 mt-2 font-mono">
                           {mergeResult}
+                        </div>
+                      )}
+
+                      {hasConflicts && (
+                        <div className="mt-3 border border-qa/40 bg-qa/5 p-3">
+                          <div className="text-xs text-qa font-semibold mb-1">
+                            conflitos de merge detectados
+                          </div>
+                          <div className="text-[11px] text-ink-300 mb-3 leading-relaxed">
+                            Um ou mais PRs têm conflito e não podem ser mergeados
+                            automaticamente. Escolha como resolver — sem
+                            integração, o QA não roda com CI verde:
+                          </div>
+                          <div className="space-y-2">
+                            <button
+                              onClick={handleResolveConflicts}
+                              disabled={resolving}
+                              className="w-full text-left bg-development text-ink-950 px-3 py-2 text-xs font-semibold hover:bg-development/80 disabled:opacity-50"
+                            >
+                              {resolving
+                                ? "disparando agente de integração…"
+                                : "1 · resolver com um agente (recomendado)"}
+                              <div className="font-normal text-[10px] text-ink-900/80 mt-0.5">
+                                cria uma branch de integração, mescla os chunks
+                                resolvendo os conflitos e abre um PR único pra você
+                                revisar.
+                              </div>
+                            </button>
+
+                            <div className="border border-ink-700 px-3 py-2">
+                              <div className="text-xs font-semibold text-ink-100">
+                                2 · avançar pro QA e integrar lá
+                              </div>
+                              <div className="text-[10px] text-ink-400 mt-0.5">
+                                use o botão “aprovar e disparar” abaixo — o QA Agent
+                                cria a branch de QA, integra os chunks resolvendo os
+                                conflitos e então escreve e roda os testes.
+                              </div>
+                            </div>
+
+                            <div className="border border-ink-700 px-3 py-2">
+                              <div className="text-xs font-semibold text-ink-100">
+                                3 · resolver manualmente
+                              </div>
+                              <div className="text-[10px] text-ink-400 mt-0.5">
+                                abra cada PR (ícone ↗ acima), resolva os conflitos no
+                                GitHub e volte a clicar em “mergear”.
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       )}
                     </div>

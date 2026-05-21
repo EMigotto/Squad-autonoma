@@ -93,6 +93,7 @@ export default function CardDetailPanel({
   } | null>(null);
   const [metrics, setMetrics] = useState<any>(null);
   const [currency, setCurrency] = useState("BRL");
+  const [activeTab, setActiveTab] = useState<"details" | "chat">("details");
 
   async function loadMetrics() {
     try {
@@ -423,7 +424,11 @@ export default function CardDetailPanel({
     card.status === "cancelled" ||
     card.stage === "done";
   const isAwaitingReview = card.status === "awaiting_review";
-  const canChat = !!card.claude_session_id && !isTerminal;
+  // Chat disponível sempre que existir uma sessão (mesmo ociosa, dá pra retomar)
+  // ou já houver histórico de conversa.
+  const hasSession = !!card.claude_session_id;
+  const canChat = hasSession && !isTerminal;
+  const chatTabAvailable = hasSession || chatHistory.length > 0;
 
   return (
     <>
@@ -448,6 +453,39 @@ export default function CardDetailPanel({
             </button>
           </div>
 
+          {/* Abas */}
+          <div className="border-b border-ink-700 flex shrink-0">
+            <button
+              onClick={() => setActiveTab("details")}
+              className={`px-5 py-2.5 text-xs uppercase tracking-widest border-b-2 transition-colors ${
+                activeTab === "details"
+                  ? "border-development text-ink-100"
+                  : "border-transparent text-ink-400 hover:text-ink-200"
+              }`}
+            >
+              detalhes
+            </button>
+            <button
+              onClick={() => setActiveTab("chat")}
+              className={`px-5 py-2.5 text-xs uppercase tracking-widest border-b-2 transition-colors flex items-center gap-2 ${
+                activeTab === "chat"
+                  ? "border-development text-ink-100"
+                  : "border-transparent text-ink-400 hover:text-ink-200"
+              }`}
+            >
+              chat
+              {chatHistory.filter((m) => m.role !== "system").length > 0 && (
+                <span className="text-[10px] bg-ink-700 text-ink-200 rounded-full px-1.5 py-0.5 leading-none">
+                  {chatHistory.filter((m) => m.role !== "system").length}
+                </span>
+              )}
+              {canChat && session.status === "running" && (
+                <span className="w-1.5 h-1.5 rounded-full bg-development animate-pulse" />
+              )}
+            </button>
+          </div>
+
+          {activeTab === "details" && (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
             {/* Indicadores do card */}
             <MetricsPanel metrics={metrics} currency={currency} onSave={saveMetric} />
@@ -535,20 +573,6 @@ export default function CardDetailPanel({
                   {gate.summary}
                 </div>
               </Section>
-            )}
-
-            {canChat && (
-              <AgentChat
-                cardId={cardId}
-                stage={card.stage}
-                sessionStatus={session.status}
-                modelName={session.agent_name}
-                chatHistory={chatHistory}
-                onSent={() => {
-                  loadChatHistory();
-                  loadDetail();
-                }}
-              />
             )}
 
             {!isTerminal && (
@@ -664,6 +688,39 @@ export default function CardDetailPanel({
               </Section>
             )}
           </div>
+          )}
+
+          {activeTab === "chat" && (
+            <div className="flex-1 flex flex-col min-h-0 p-5">
+              {chatTabAvailable ? (
+                <AgentChat
+                  cardId={cardId}
+                  stage={card.stage}
+                  sessionStatus={session.status}
+                  modelName={session.agent_name}
+                  chatHistory={chatHistory}
+                  canSend={canChat}
+                  onSent={() => {
+                    loadChatHistory();
+                    loadDetail();
+                  }}
+                />
+              ) : (
+                <div className="flex-1 flex items-center justify-center text-center">
+                  <div className="max-w-sm">
+                    <div className="text-sm text-ink-300 mb-2">
+                      Sem conversa disponível ainda
+                    </div>
+                    <div className="text-xs text-ink-400 leading-relaxed">
+                      O chat com o agente fica disponível assim que uma sessão é
+                      disparada nesta etapa. Aprove o card para a próxima etapa
+                      ou re-execute a etapa atual para iniciar uma sessão.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1460,6 +1517,7 @@ function AgentChat({
   sessionStatus,
   modelName,
   chatHistory,
+  canSend = true,
   onSent,
 }: {
   cardId: string;
@@ -1467,6 +1525,7 @@ function AgentChat({
   sessionStatus: string;
   modelName?: string;
   chatHistory: ChatMessage[];
+  canSend?: boolean;
   onSent: () => void;
 }) {
   const [input, setInput] = useState("");
@@ -1561,15 +1620,15 @@ function AgentChat({
   );
 
   return (
-    <section>
+    <section className="flex-1 flex flex-col min-h-0">
       <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
         // conversa com o agente
       </div>
 
       {/* Janela de chat estilo Claude Code */}
-      <div className="border border-ink-700 bg-ink-950 flex flex-col">
+      <div className="border border-ink-700 bg-ink-950 flex flex-col flex-1 min-h-0">
         {/* Header com modelo e status */}
-        <div className="border-b border-ink-800 px-3 py-2 flex items-center gap-2 bg-ink-900/60">
+        <div className="border-b border-ink-800 px-3 py-2 flex items-center gap-2 bg-ink-900/60 shrink-0">
           <div className="flex items-center gap-1.5">
             <span
               className={`w-2 h-2 rounded-full ${
@@ -1591,7 +1650,7 @@ function AgentChat({
         </div>
 
         {/* Mensagens */}
-        <div className="max-h-80 overflow-y-auto p-3 space-y-3">
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
           {visibleMessages.length === 0 && (
             <div className="text-xs text-ink-400 italic text-center py-6">
               comece a conversa — peça mudanças, esclareça requisitos ou
@@ -1643,7 +1702,8 @@ function AgentChat({
         )}
 
         {/* Input */}
-        <div className="border-t border-ink-800 p-2">
+        {canSend ? (
+        <div className="border-t border-ink-800 p-2 shrink-0">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -1687,6 +1747,12 @@ function AgentChat({
             </button>
           </div>
         </div>
+        ) : (
+          <div className="border-t border-ink-800 p-3 shrink-0 text-[11px] text-ink-400 text-center">
+            sessão encerrada — re-execute a etapa ou avance o card para iniciar
+            uma nova sessão e voltar a conversar com o agente.
+          </div>
+        )}
       </div>
     </section>
   );
