@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { advanceCard } from "@/lib/orchestrator";
+import { recomputeCardMetrics } from "@/lib/metrics";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -42,6 +43,13 @@ export async function POST(
       user.id,
       body.override_initial_message
     );
+
+    // Atualiza os indicadores do card (best-effort)
+    try {
+      await recomputeCardMetrics(gate.card_id);
+    } catch (e) {
+      console.error("recomputeCardMetrics failed", e);
+    }
 
     return NextResponse.json({ status: "ok" });
   } catch (e) {

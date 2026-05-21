@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getActiveProjectId } from "@/lib/projects";
 import { forceSyncSession } from "@/lib/orchestrator";
+import { recomputeCardMetrics } from "@/lib/metrics";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -45,6 +46,11 @@ export async function POST() {
         const result = await forceSyncSession(card.id);
         synced.push({ card_id: card.id, ...result });
         if (result.card_status !== "running") unlocked++;
+        try {
+          await recomputeCardMetrics(card.id);
+        } catch {
+          /* best-effort */
+        }
       } catch (e) {
         synced.push({
           card_id: card.id,

@@ -52,7 +52,8 @@ export default async function BoardPage() {
       .select(
         `id, stage, status, claude_session_id, updated_at,
          feature:features!inner ( id, slug, title, github_repo, claude_environment_id, project_id ),
-         human_gates ( id, summary, decision, assignee_id )`
+         human_gates ( id, summary, decision, assignee_id ),
+         metrics:card_metrics ( cycle_time_hours, first_pass, gates_total, gates_rejected, test_coverage_pct, total_cost, is_done )`
       )
       .eq("feature.project_id", activeProjectId)
       .order("updated_at", { ascending: false });

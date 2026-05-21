@@ -81,9 +81,55 @@ export default function FeatureCard({ card, currentUser, dragging, onClick }: Pr
         </div>
       )}
 
+      {/* Indicadores */}
+      {card.metrics && <CardMetricBadges m={card.metrics} />}
+
       <div className="mt-2 text-[10px] text-ink-400 opacity-60 group-hover:opacity-100">
         clique para detalhes →
       </div>
+    </div>
+  );
+}
+
+function fmtCycle(hours: number | null | undefined): string {
+  if (hours == null) return "—";
+  const h = Number(hours);
+  if (h < 24) return `${h.toFixed(0)}h`;
+  return `${(h / 24).toFixed(1)}d`;
+}
+
+function CardMetricBadges({ m }: { m: any }) {
+  const cov = m.test_coverage_pct;
+  const items: { label: string; value: string; tone: string }[] = [
+    { label: "ciclo", value: fmtCycle(m.cycle_time_hours), tone: "text-development" },
+    {
+      label: "1ª",
+      value: m.gates_total > 0 ? (m.first_pass ? "✓" : "✗") : "—",
+      tone: m.gates_total > 0 && m.first_pass ? "text-qa" : "text-discovery",
+    },
+    {
+      label: "cob.",
+      value: cov != null ? `${Number(cov).toFixed(0)}%` : "—",
+      tone: cov != null && Number(cov) >= 80 ? "text-qa" : "text-ink-300",
+    },
+    {
+      label: "custo",
+      value: Number(m.total_cost) > 0 ? `${Number(m.total_cost).toFixed(0)}` : "—",
+      tone: "text-planning",
+    },
+  ];
+  return (
+    <div className="mt-2 pt-2 border-t border-ink-800 grid grid-cols-4 gap-1">
+      {items.map((it) => (
+        <div key={it.label} className="text-center">
+          <div className={`text-[12px] font-semibold leading-none ${it.tone}`}>
+            {it.value}
+          </div>
+          <div className="text-[8px] uppercase tracking-wider text-ink-400 mt-0.5">
+            {it.label}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

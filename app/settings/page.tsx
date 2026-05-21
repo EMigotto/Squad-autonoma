@@ -11,6 +11,10 @@ interface Settings {
   auto_advance_after_tl: boolean;
   default_base_branch: string;
   notification_slack_webhook: string | null;
+  human_hourly_cost?: number;
+  token_cost_input_mtok?: number;
+  token_cost_output_mtok?: number;
+  metrics_currency?: string;
 }
 
 interface Agent {
@@ -210,6 +214,67 @@ export default function SettingsPage() {
 
         {/* PROJETOS */}
         <ProjectsSection />
+
+        {/* CUSTOS DE REFERÊNCIA (para os indicadores) */}
+        <section>
+          <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
+            // custos de referência (indicadores)
+          </h2>
+          <div className="text-xs text-ink-400 mb-4 leading-relaxed">
+            Usados para calcular o <strong>custo por feature</strong>. Definidos
+            por projeto (equipe). O custo humano costuma ser o fator dominante.
+          </div>
+          <div className="grid grid-cols-4 gap-3">
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">
+                custo humano / hora
+              </label>
+              <input
+                type="number"
+                value={settings.human_hourly_cost ?? 0}
+                onChange={(e) => update("human_hourly_cost", Number(e.target.value) as any)}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">
+                custo input / Mtok
+              </label>
+              <input
+                type="number"
+                value={settings.token_cost_input_mtok ?? 0}
+                onChange={(e) => update("token_cost_input_mtok", Number(e.target.value) as any)}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">
+                custo output / Mtok
+              </label>
+              <input
+                type="number"
+                value={settings.token_cost_output_mtok ?? 0}
+                onChange={(e) => update("token_cost_output_mtok", Number(e.target.value) as any)}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">moeda</label>
+              <input
+                type="text"
+                value={settings.metrics_currency ?? "BRL"}
+                onChange={(e) => update("metrics_currency", e.target.value as any)}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+              />
+            </div>
+          </div>
+          <button
+            onClick={saveSettings}
+            className="mt-4 bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300"
+          >
+            salvar custos
+          </button>
+        </section>
 
         {/* WORKFLOW DIAGRAM */}
         <section>

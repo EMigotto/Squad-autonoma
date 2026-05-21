@@ -91,11 +91,35 @@ export default function CardDetailPanel({
     loading: boolean;
     html_url?: string;
   } | null>(null);
+  const [metrics, setMetrics] = useState<any>(null);
+  const [currency, setCurrency] = useState("BRL");
+
+  async function loadMetrics() {
+    try {
+      const res = await fetch(`/api/cards/${cardId}/metrics`);
+      const data = await res.json();
+      setMetrics(data.metrics);
+      setCurrency(data.currency ?? "BRL");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function saveMetric(patch: { test_coverage_pct?: number | null; human_hours?: number | null }) {
+    const res = await fetch(`/api/cards/${cardId}/metrics`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (data.metrics) setMetrics(data.metrics);
+  }
 
   useEffect(() => {
     loadDetail();
     loadChatHistory();
     loadArtifacts();
+    loadMetrics();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardId]);
 
@@ -425,6 +449,9 @@ export default function CardDetailPanel({
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            {/* Indicadores do card */}
+            <MetricsPanel metrics={metrics} currency={currency} onSave={saveMetric} />
+
             {/* Etapas com sessões e artefatos linkados */}
             <StagesView
               stageRuns={stageRuns ?? []}
@@ -874,6 +901,111 @@ const STAGE_META: {
   },
   { code: "qa", label: "Qualidade", color: "text-qa", border: "border-qa" },
 ];
+
+function fmtCycleH(hours: number | null | undefined): string {
+  if (hours == null) return "—";
+  const h = Number(hours);
+  if (h < 24) return `${h.toFixed(1)}h`;
+  return `${(h / 24).toFixed(1)} dias`;
+}
+
+function MetricsPanel({
+  metrics,
+  currency,
+  onSave,
+}: {
+  metrics: any;
+  currency: string;
+  onSave: (p: { test_coverage_pct?: number | null; human_hours?: number | null }) => void;
+}) {
+  const [cov, setCov] = useState<string>("");
+  const [hrs, setHrs] = useState<string>("");
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (metrics) {
+      setCov(metrics.test_coverage_pct != null ? String(metrics.test_coverage_pct) : "");
+      setHrs(metrics.human_hours != null ? String(metrics.human_hours) : "");
+    }
+  }, [metrics]);
+
+  if (!metrics) return null;
+
+  const approval =
+    metrics.gates_total > 0
+      ? metrics.first_pass
+        ? "1ª tentativa"
+        : `${metrics.gates_rejected} rejeição(ões)`
+      : "—";
+
+  const tiles = [
+    { label: "Cycle time", value: fmtCycleH(metrics.cycle_time_hours), tone: "text-development", sub: metrics.is_done ? "concluído" : "em andamento" },
+    { label: "Aprovação", value: metrics.gates_total > 0 ? (metrics.first_pass ? "✓" : "✗") : "—", tone: metrics.gates_total > 0 && metrics.first_pass ? "text-qa" : "text-discovery", sub: approval },
+    { label: "Cobertura", value: metrics.test_coverage_pct != null ? `${Number(metrics.test_coverage_pct).toFixed(0)}%` : "—", tone: metrics.test_coverage_pct != null && Number(metrics.test_coverage_pct) >= 80 ? "text-qa" : "text-ink-300", sub: "meta ≥ 80%" },
+    { label: "Custo", value: Number(metrics.total_cost) > 0 ? `${currency} ${Number(metrics.total_cost).toFixed(0)}` : "—", tone: "text-planning", sub: `${Number(metrics.human_hours ?? 0).toFixed(2)}h humanas` },
+  ];
+
+  return (
+    <Section title="indicadores">
+      <div className="grid grid-cols-4 gap-2">
+        {tiles.map((t) => (
+          <div key={t.label} className="border border-ink-700 bg-ink-900/40 p-2.5">
+            <div className="text-[9px] uppercase tracking-wider text-ink-400 mb-1">{t.label}</div>
+            <div className={`text-lg font-semibold leading-none ${t.tone}`}>{t.value}</div>
+            <div className="text-[9px] text-ink-500 mt-1">{t.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-2">
+        {editing ? (
+          <div className="flex items-end gap-2">
+            <div>
+              <label className="text-[10px] text-ink-400 block mb-0.5">cobertura %</label>
+              <input
+                type="number"
+                value={cov}
+                onChange={(e) => setCov(e.target.value)}
+                className="w-20 bg-ink-900 border border-ink-700 px-2 py-1 text-xs text-ink-100 focus:border-discovery focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-ink-400 block mb-0.5">horas humanas</label>
+              <input
+                type="number"
+                value={hrs}
+                onChange={(e) => setHrs(e.target.value)}
+                className="w-24 bg-ink-900 border border-ink-700 px-2 py-1 text-xs text-ink-100 focus:border-discovery focus:outline-none"
+              />
+            </div>
+            <button
+              onClick={() => {
+                onSave({
+                  test_coverage_pct: cov === "" ? null : Number(cov),
+                  human_hours: hrs === "" ? null : Number(hrs),
+                });
+                setEditing(false);
+              }}
+              className="bg-discovery text-ink-950 px-3 py-1 text-xs font-semibold hover:bg-discovery/80"
+            >
+              salvar
+            </button>
+            <button onClick={() => setEditing(false)} className="text-xs text-ink-400 hover:text-ink-100 px-2 py-1">
+              cancelar
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setEditing(true)}
+            className="text-[11px] text-development hover:underline"
+          >
+            ajustar cobertura / horas humanas
+          </button>
+        )}
+      </div>
+    </Section>
+  );
+}
 
 function fileStage(name: string, path: string): string {
   const n = name.toLowerCase();
