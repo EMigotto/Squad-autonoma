@@ -65,6 +65,20 @@ async function getProjectContextBlock(projectId?: string): Promise<string> {
     .eq("project_id", projectId)
     .order("created_at", { ascending: true });
 
+  // Repositórios do projeto (multi-repo) + dependências declaradas
+  const { data: repos } = await sb
+    .from("project_repositories")
+    .select("label, github_repo, depends_on, description")
+    .eq("project_id", projectId);
+
+  // Áreas sensíveis (revisão reforçada)
+  const { data: appSettings } = await sb
+    .from("app_settings")
+    .select("sensitive_paths")
+    .eq("project_id", projectId)
+    .limit(1)
+    .maybeSingle();
+
   const isExisting = project.app_type === "existing";
   let block = `\n--- PROJECT CONTEXT ---\n`;
   block += `Application type: ${isExisting ? "EXISTING / legacy codebase" : "NEW / greenfield"}\n`;
@@ -97,6 +111,33 @@ async function getProjectContextBlock(projectId?: string): Promise<string> {
       }\n`;
     }
   }
+
+  // Multi-repo: lista os repos do projeto e dependências
+  if (repos && repos.length > 1) {
+    block += `\nThis project spans MULTIPLE repositories. A feature may touch more ` +
+      `than one. Respect declared dependencies (implement/deploy depended-upon repos ` +
+      `first) and keep cross-repo contracts (APIs, events, schemas) compatible:\n`;
+    for (const r of repos) {
+      block += `- ${r.label ?? r.github_repo} (${r.github_repo})`;
+      if (r.description) block += ` — ${r.description}`;
+      if (r.depends_on) block += ` [depends on: ${r.depends_on}]`;
+      block += `\n`;
+    }
+  }
+
+  // Áreas sensíveis
+  const sensitive = (appSettings?.sensitive_paths ?? "").trim();
+  if (sensitive) {
+    const list = sensitive
+      .split(/[\n,]+/)
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+    block += `\nSENSITIVE AREAS (handle with extra care): ${list.join(", ")}.\n` +
+      `If your change touches any of these, you MUST clearly flag it at the top of ` +
+      `your end-of-turn summary with "⚠ SENSITIVE AREA TOUCHED:" and the impact, so a ` +
+      `human reviews it carefully.\n`;
+  }
+
   block += `---\n`;
   return block;
 }

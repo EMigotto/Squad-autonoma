@@ -37,6 +37,19 @@ export default function TransitionDialog({
   const [mergeResult, setMergeResult] = useState<string>("");
   const [resolving, setResolving] = useState(false);
 
+  // Revisão reforçada (áreas sensíveis)
+  const [reinforced, setReinforced] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((d) => setReinforced(!!d.settings?.require_reinforced_review))
+      .catch(() => {});
+  }, []);
+
+  const reinforcedOk = !reinforced || confirmText.trim().toUpperCase() === "APROVAR";
+
   // Detecta se o último merge reportou conflitos
   const hasConflicts = /conflict/i.test(mergeResult);
 
@@ -387,7 +400,26 @@ export default function TransitionDialog({
           )}
         </div>
 
-        <div className="border-t border-ink-700 p-4 flex justify-end gap-2 shrink-0">
+        <div className="border-t border-ink-700 p-4 shrink-0">
+          {reinforced && (
+            <div className="mb-3 border border-planning/40 bg-planning/5 p-3">
+              <div className="text-xs text-planning font-semibold mb-1">
+                revisão reforçada ativada
+              </div>
+              <div className="text-[11px] text-ink-300 mb-2">
+                Para confirmar esta transição, digite{" "}
+                <span className="font-mono text-ink-100">APROVAR</span> abaixo.
+                Verifique se o resumo sinaliza áreas sensíveis tocadas.
+              </div>
+              <input
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="APROVAR"
+                className="w-40 bg-ink-900 border border-ink-700 px-2 py-1 text-sm font-mono text-ink-100 focus:border-planning focus:outline-none"
+              />
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
             disabled={confirming}
@@ -397,7 +429,7 @@ export default function TransitionDialog({
           </button>
           <button
             onClick={handleApprove}
-            disabled={confirming || loading}
+            disabled={confirming || loading || !reinforcedOk}
             className="bg-qa text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-qa/80 disabled:opacity-50"
           >
             {confirming
@@ -406,6 +438,7 @@ export default function TransitionDialog({
                 ? "marcar como done"
                 : "aprovar e disparar →"}
           </button>
+        </div>
         </div>
       </div>
     </div>

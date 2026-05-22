@@ -52,6 +52,8 @@ export async function POST(req: Request) {
       github_repo: body.github_repo,
       label: body.label || body.github_repo,
       default_base_branch: body.default_base_branch || "main",
+      description: body.description || null,
+      depends_on: body.depends_on || null,
     })
     .select()
     .single();

@@ -15,6 +15,8 @@ interface Settings {
   token_cost_input_mtok?: number;
   token_cost_output_mtok?: number;
   metrics_currency?: string;
+  require_reinforced_review?: boolean;
+  sensitive_paths?: string;
 }
 
 interface Agent {
@@ -77,6 +79,9 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [tab, setTab] = useState<
+    "people" | "knowledge" | "agents" | "workflow"
+  >("people");
   const [showAgentEditor, setShowAgentEditor] = useState(false);
   const [creatingNew, setCreatingNew] = useState(false);
   const [consoleAgents, setConsoleAgents] = useState<any[]>([]);
@@ -215,6 +220,30 @@ export default function SettingsPage() {
         {/* PROJETOS */}
         <ProjectsSection />
 
+        {/* ABAS DE CONFIGURAÇÃO DO PROJETO ATIVO */}
+        <div className="border-b border-ink-700 flex flex-wrap gap-1 sticky top-0 bg-ink-950 z-10">
+          {[
+            ["people", "pessoas & custos"],
+            ["knowledge", "conhecimento & dreaming"],
+            ["agents", "orquestração & agentes"],
+            ["workflow", "workflow, gates & notificações"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id as typeof tab)}
+              className={`px-4 py-2 text-xs uppercase tracking-widest border-b-2 transition-colors ${
+                tab === id
+                  ? "border-discovery text-ink-100"
+                  : "border-transparent text-ink-400 hover:text-ink-200"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "people" && (
+        <>
         {/* PESSOAS DO PROJETO */}
         <PeopleSection />
 
@@ -282,11 +311,20 @@ export default function SettingsPage() {
         </section>
 
         {/* CONHECIMENTO & INSTRUÇÕES */}
+        </>
+        )}
+
+        {tab === "knowledge" && (
+        <>
         <KnowledgeSection />
 
         {/* DREAMING (evolução contínua) */}
         <DreamingSection />
+        </>
+        )}
 
+        {tab === "agents" && (
+        <>
         {/* WORKFLOW DIAGRAM */}
         <section>
           <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
@@ -435,6 +473,11 @@ export default function SettingsPage() {
         </section>
 
         {/* GIT WORKFLOW */}
+        </>
+        )}
+
+        {tab === "workflow" && (
+        <>
         <section>
           <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
             // git workflow
@@ -487,6 +530,36 @@ export default function SettingsPage() {
 
         <section>
           <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
+            // revisão reforçada (áreas sensíveis)
+          </h2>
+          <div className="space-y-3">
+            <Toggle
+              label="exigir revisão reforçada"
+              description="Quando ligado, aprovar transições de Desenvolvimento→QA e QA→Concluído exige uma confirmação extra (digitar APROVAR), reduzindo aprovações por engano em mudanças sensíveis."
+              value={settings.require_reinforced_review ?? false}
+              onChange={(v) => update("require_reinforced_review", v as any)}
+            />
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">
+                caminhos sensíveis (um por linha — globs)
+              </label>
+              <textarea
+                value={settings.sensitive_paths ?? ""}
+                onChange={(e) => update("sensitive_paths", e.target.value as any)}
+                rows={3}
+                placeholder={"src/payments/**\ndb/migrations/**\n**/auth/**"}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm font-mono text-ink-100 focus:border-discovery focus:outline-none"
+              />
+              <div className="text-[10px] text-ink-400 mt-1">
+                os agentes são instruídos a destacar no resumo quando tocam esses
+                caminhos, para você revisar com atenção redobrada.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
             // notificações
           </h2>
           <SimpleField
@@ -496,6 +569,8 @@ export default function SettingsPage() {
             placeholder="https://hooks.slack.com/services/..."
           />
         </section>
+        </>
+        )}
 
         <div className="pt-4 border-t border-ink-700 flex items-center justify-between">
           {error && <div className="text-xs text-qa font-mono">{error}</div>}
@@ -1070,6 +1145,8 @@ function ReposManager() {
   const [loading, setLoading] = useState(true);
   const [newRepo, setNewRepo] = useState("");
   const [newLabel, setNewLabel] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [newDeps, setNewDeps] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
 
@@ -1090,7 +1167,12 @@ function ReposManager() {
     const res = await fetch("/api/projects/repos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ github_repo: newRepo.trim(), label: newLabel.trim() }),
+      body: JSON.stringify({
+        github_repo: newRepo.trim(),
+        label: newLabel.trim(),
+        description: newDesc.trim(),
+        depends_on: newDeps.trim(),
+      }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -1098,6 +1180,8 @@ function ReposManager() {
     } else {
       setNewRepo("");
       setNewLabel("");
+      setNewDesc("");
+      setNewDeps("");
       await load();
     }
     setAdding(false);
@@ -1187,6 +1271,30 @@ function ReposManager() {
             className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
           />
         </div>
+        <div className="flex-1 min-w-[150px]">
+          <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+            papel (opcional)
+          </label>
+          <input
+            type="text"
+            value={newDesc}
+            onChange={(e) => setNewDesc(e.target.value)}
+            placeholder="ex: serviço de pagamentos"
+            className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+          />
+        </div>
+        <div className="flex-1 min-w-[150px]">
+          <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+            depende de (opcional)
+          </label>
+          <input
+            type="text"
+            value={newDeps}
+            onChange={(e) => setNewDeps(e.target.value)}
+            placeholder="ex: API, Auth"
+            className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+          />
+        </div>
         <button
           onClick={addRepo}
           disabled={adding || !newRepo.trim()}
@@ -1194,6 +1302,10 @@ function ReposManager() {
         >
           {adding ? "..." : "+ adicionar repo"}
         </button>
+      </div>
+      <div className="text-[10px] text-ink-400 mt-2">
+        “depende de” declara a ordem entre repositórios — os agentes implementam
+        os repos dependidos primeiro e mantêm os contratos compatíveis.
       </div>
       {error && <div className="text-xs text-qa font-mono mt-2">{error}</div>}
     </div>
