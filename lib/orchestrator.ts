@@ -281,25 +281,62 @@ export async function resolveConflictsWithAgent(
   const base = settings.default_base_branch ?? "main";
   const integrationBranch = `feat/${feature.slug}/integration`;
 
+  // Busca a lista REAL de PRs abertos da feature, pra enumerar todos no prompt
+  let prList = "";
+  let prCount = 0;
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${feature.github_repo}/pulls?state=open&per_page=100`,
+      { headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" } }
+    );
+    if (res.ok) {
+      const items = await res.json();
+      const norm = feature.slug.toLowerCase();
+      const matched = (Array.isArray(items) ? items : []).filter((pr: any) => {
+        const ref = (pr.head?.ref ?? "").toLowerCase();
+        const title = (pr.title ?? "").toLowerCase();
+        return ref.includes(norm) || title.includes(norm);
+      });
+      prCount = matched.length;
+      prList = matched
+        .map((pr: any) => `   - PR #${pr.number} (branch: ${pr.head?.ref}) — ${pr.title}`)
+        .join("\n");
+    }
+  } catch {
+    /* segue sem a lista; o agente descobre via API */
+  }
+
+  const enumerated = prList
+    ? `\nThe open chunk PRs to integrate (ALL of them, ${prCount} total) are:\n${prList}\n`
+    : "";
+
   const prompt =
-    `Your task is to INTEGRATE the open chunk Pull Requests for feature ` +
-    `'${feature.slug}' into a single conflict-free branch, resolving any merge ` +
-    `conflicts.\n\n` +
-    `STEPS:\n` +
+    `Your task is to INTEGRATE **all** open chunk Pull Requests for feature ` +
+    `'${feature.slug}' into a single conflict-free branch, resolving every merge ` +
+    `conflict. This is not done until EVERY chunk is integrated.\n` +
+    enumerated +
+    `\nSTEPS:\n` +
     `1. Clone the repo.\n` +
-    `2. List the open PRs whose head branch contains '${feature.slug}'.\n` +
-    `3. Create an integration branch '${integrationBranch}' from '${base}'.\n` +
-    `4. Merge each chunk branch into '${integrationBranch}', one at a time, in ` +
-    `issue/chunk order. When a merge conflict occurs, RESOLVE it preserving the ` +
-    `intended behavior of EVERY chunk — never discard a chunk's functionality. ` +
-    `If two chunks change the same code, integrate both changes coherently.\n` +
-    `5. After each resolution, ensure the project still builds and lints.\n` +
-    `6. Push '${integrationBranch}' and open a SINGLE pull request from it into ` +
-    `'${base}', titled "feat(${feature.slug}): integração dos chunks", with a body ` +
-    `listing which PRs/issues it consolidates and how conflicts were resolved.\n` +
-    `7. Do NOT merge it yourself — leave it open for human review.\n` +
-    `8. End your turn with: the integration PR number/URL, the list of conflicts ` +
-    `you resolved, and any risk worth a closer look in review.\n\n` +
+    `2. Create an integration branch '${integrationBranch}' from '${base}'.\n` +
+    `3. Merge EVERY chunk branch listed above into '${integrationBranch}', one at a ` +
+    `time, in ascending chunk/issue order. Do NOT stop after the first one — you ` +
+    `must process the complete list.\n` +
+    `4. CONFLICT RESOLUTION POLICY (apply the SAME policy to every conflict, for ` +
+    `consistency): keep BOTH sides' intent — integrate the changes from the incoming ` +
+    `chunk together with what's already on the integration branch, so no chunk loses ` +
+    `functionality. Only when two changes are truly mutually exclusive, prefer the ` +
+    `incoming chunk and leave a "// TODO integration:" note. Never resolve a conflict ` +
+    `by simply discarding one side.\n` +
+    `5. After each merge, make sure the project still builds and lints before moving ` +
+    `to the next chunk.\n` +
+    `6. Keep a running log: for each PR, record "merged clean" or "merged with ` +
+    `conflicts resolved in <files>".\n` +
+    `7. When ALL chunks are merged, push '${integrationBranch}' and open a SINGLE PR ` +
+    `from it into '${base}', titled "feat(${feature.slug}): integração dos chunks", ` +
+    `whose body lists every PR/issue consolidated and how each conflict was resolved.\n` +
+    `8. Do NOT merge it yourself — leave it open for human review.\n` +
+    `9. End your turn with: the integration PR URL, the per-chunk log from step 6, and ` +
+    `confirmation that all ${prCount || "open"} chunks were integrated.\n\n` +
     `--- GitHub credentials ---\n` +
     `Repo: ${feature.github_repo}\n` +
     `Token: ${token}\n` +
@@ -308,7 +345,6 @@ export async function resolveConflictsWithAgent(
     `Base branch: ${base}\n---\n` +
     `Disable git commit signing with -c commit.gpgsign=false. Set a git identity.`;
 
-  // Reusa startStage (mesma etapa development, Dev Agent), com prompt custom.
   const sessionId = await startStage(cardId, prompt);
   return { session_id: sessionId };
 }
@@ -1470,8 +1506,23 @@ function defaultKickoff(
       `6. If a test reveals an IMPLEMENTATION bug (not a test bug), comment on the ` +
       `relevant chunk PR/issue with the failing test and stack, apply label ` +
       `status:bug, and report it — do NOT silently fix product code.\n` +
-      `7. Commit, push and open a DRAFT PR with the tests.\n` +
-      `8. End your turn with: coverage summary, scenarios covered, and any bugs found.\n\n` +
+      `7. WRITE a structured report at docs/features/${feature.slug}/qa-report.md ` +
+      `with EXACTLY these three sections, each filled with real detail (never leave ` +
+      `a heading empty):\n` +
+      `   ## Coverage Summary\n` +
+      `   - overall line coverage % on new code, and a short per-area breakdown ` +
+      `(table: area/file | % | notes).\n` +
+      `   ## Scenarios Covered\n` +
+      `   - a markdown table with columns: Scenario (from the Gherkin) | Test file | ` +
+      `Status (pass/fail). One row per acceptance scenario.\n` +
+      `   ## Implementation Bugs Found\n` +
+      `   - for each bug: a numbered item with title, severity, the failing scenario, ` +
+      `steps/expected/actual, and the chunk PR/issue you commented on. If none, write ` +
+      `"No implementation bugs found." explicitly.\n` +
+      `   Also put a metadata line at the very top: "coverage: <number>%".\n` +
+      `8. Commit, push and open a DRAFT PR with the tests AND the qa-report.md.\n` +
+      `9. End your turn with the same three sections (Coverage Summary, Scenarios ` +
+      `Covered, Implementation Bugs Found) filled in — these must match qa-report.md.\n\n` +
       `Disable git commit signing with -c commit.gpgsign=false. Set a git identity.` +
       credBlock +
       workflowBlock +

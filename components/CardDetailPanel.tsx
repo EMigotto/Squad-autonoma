@@ -1077,6 +1077,8 @@ function fileStage(name: string, path: string): string {
   if (n.includes("adr") || n.includes("build-order") || n.includes("build_order"))
     return "planning";
   if (
+    n.includes("qa-report") ||
+    n.includes("qa_report") ||
     n.includes("test") ||
     n.includes(".spec.") ||
     p.includes("__tests__") ||

@@ -215,14 +215,19 @@ export default function SettingsPage() {
         {/* PROJETOS */}
         <ProjectsSection />
 
+        {/* PESSOAS DO PROJETO */}
+        <PeopleSection />
+
         {/* CUSTOS DE REFERÊNCIA (para os indicadores) */}
         <section>
           <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
             // custos de referência (indicadores)
           </h2>
           <div className="text-xs text-ink-400 mb-4 leading-relaxed">
-            Usados para calcular o <strong>custo por feature</strong>. Definidos
-            por projeto (equipe). O custo humano costuma ser o fator dominante.
+            O <strong>custo humano/hora</strong> é calculado automaticamente a
+            partir das pessoas cadastradas acima (média de salário ÷ horas). Você
+            pode sobrescrevê-lo manualmente aqui se preferir. O custo de tokens é
+            usado quando a captura de uso estiver ativa.
           </div>
           <div className="grid grid-cols-4 gap-3">
             <div>
@@ -512,6 +517,145 @@ export default function SettingsPage() {
         />
       )}
     </main>
+  );
+}
+
+function PeopleSection() {
+  const [people, setPeople] = useState<any[]>([]);
+  const [hourly, setHourly] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({ name: "", role: "", monthly_salary: "", monthly_hours: "160" });
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    const res = await fetch("/api/projects/people");
+    const data = await res.json();
+    setPeople(data.people ?? []);
+    setHourly(data.hourly_cost ?? 0);
+    setLoading(false);
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add() {
+    if (!form.name.trim()) return;
+    setSaving(true);
+    const res = await fetch("/api/projects/people", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: form.name,
+        role: form.role,
+        monthly_salary: Number(form.monthly_salary || 0),
+        monthly_hours: Number(form.monthly_hours || 160),
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      setForm({ name: "", role: "", monthly_salary: "", monthly_hours: "160" });
+      await load();
+    } else {
+      alert(data.error ?? "erro");
+    }
+    setSaving(false);
+  }
+
+  async function remove(id: string) {
+    await fetch(`/api/projects/people/${id}`, { method: "DELETE" });
+    await load();
+  }
+
+  const fmt = (n: number) =>
+    n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <section>
+      <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
+        // pessoas do projeto
+      </h2>
+      <div className="text-xs text-ink-400 mb-4 leading-relaxed">
+        Cadastre quem atua no projeto. O custo/hora de cada pessoa ={" "}
+        <span className="font-mono">salário ÷ horas/mês</span>, e o custo/hora do
+        projeto (usado nos indicadores) é a média entre elas.
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-ink-400">carregando…</div>
+      ) : (
+        <>
+          {people.length > 0 && (
+            <div className="border border-ink-700 mb-3">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-ink-400 border-b border-ink-800">
+                    <th className="text-left p-2">nome</th>
+                    <th className="text-left p-2">cargo</th>
+                    <th className="text-right p-2">salário/mês</th>
+                    <th className="text-right p-2">horas/mês</th>
+                    <th className="text-right p-2">custo/hora</th>
+                    <th className="p-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {people.map((p) => (
+                    <tr key={p.id} className="border-b border-ink-900">
+                      <td className="p-2 text-ink-100">{p.name}</td>
+                      <td className="p-2 text-ink-300">{p.role ?? "—"}</td>
+                      <td className="p-2 text-right text-ink-300">R$ {fmt(Number(p.monthly_salary))}</td>
+                      <td className="p-2 text-right text-ink-300">{Number(p.monthly_hours)}</td>
+                      <td className="p-2 text-right text-development font-mono">
+                        R$ {fmt(Number(p.monthly_salary) / Number(p.monthly_hours || 160))}
+                      </td>
+                      <td className="p-2 text-right">
+                        <button onClick={() => remove(p.id)} className="text-qa hover:underline text-xs">
+                          remover
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="border border-discovery/30 bg-discovery/5 px-3 py-2 mb-4 text-sm">
+            custo/hora do projeto (média):{" "}
+            <span className="text-discovery font-semibold font-mono">R$ {fmt(hourly)}</span>
+            <span className="text-[11px] text-ink-400"> — aplicado automaticamente nos indicadores</span>
+          </div>
+
+          <div className="grid grid-cols-5 gap-2 items-end">
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">nome</label>
+              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">cargo</label>
+              <input value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}
+                placeholder="ex: Dev Sênior"
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">salário/mês</label>
+              <input type="number" value={form.monthly_salary} onChange={(e) => setForm({ ...form, monthly_salary: e.target.value })}
+                placeholder="11000"
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
+            </div>
+            <div>
+              <label className="text-[11px] text-ink-400 block mb-1">horas/mês</label>
+              <input type="number" value={form.monthly_hours} onChange={(e) => setForm({ ...form, monthly_hours: e.target.value })}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
+            </div>
+            <button onClick={add} disabled={saving}
+              className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300 disabled:opacity-50">
+              {saving ? "…" : "+ adicionar"}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
