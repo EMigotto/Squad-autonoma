@@ -45,6 +45,63 @@ async function getAppSettings(projectId?: string) {
 }
 
 /**
+ * Monta um bloco de contexto do PROJETO para injetar nos kickoffs dos agentes.
+ * Inclui: tipo de aplicação (nova/existente), stack, arquivo de instruções e a
+ * base de conhecimento. É o que faz os agentes respeitarem o legado existente.
+ */
+async function getProjectContextBlock(projectId?: string): Promise<string> {
+  if (!projectId) return "";
+  const sb = createServiceClient();
+  const { data: project } = await sb
+    .from("projects")
+    .select("app_type, app_kind, tech_stack, instructions_path")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (!project) return "";
+
+  const { data: knowledge } = await sb
+    .from("project_knowledge")
+    .select("title, kind, location, notes")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: true });
+
+  const isExisting = project.app_type === "existing";
+  let block = `\n--- PROJECT CONTEXT ---\n`;
+  block += `Application type: ${isExisting ? "EXISTING / legacy codebase" : "NEW / greenfield"}\n`;
+  if (project.app_kind) block += `Kind: ${project.app_kind}\n`;
+  if (project.tech_stack) block += `Tech stack: ${project.tech_stack}\n`;
+  const instr = project.instructions_path || "CLAUDE.md";
+  block += `Instructions file: ${instr}\n`;
+
+  if (isExisting) {
+    block +=
+      `\nThis is an EXISTING codebase. Before changing anything:\n` +
+      `- Read ${instr} (if present) and the knowledge base below.\n` +
+      `- Match the existing architecture, conventions, naming and patterns. Do NOT ` +
+      `re-architect or introduce new frameworks without explicit instruction.\n` +
+      `- Prefer the smallest change that satisfies the requirement. Keep public ` +
+      `contracts/APIs backward compatible unless told otherwise.\n` +
+      `- If the change affects build/deploy/migrations, call it out explicitly.\n`;
+  } else {
+    block +=
+      `\nThis is a NEW codebase. If ${instr} does not exist yet, CREATE it as you go, ` +
+      `documenting the architecture, conventions, commands (build/test/lint) and key ` +
+      `decisions, so future sessions stay consistent.\n`;
+  }
+
+  if (knowledge && knowledge.length > 0) {
+    block += `\nKnowledge base (read what's relevant before working):\n`;
+    for (const k of knowledge) {
+      block += `- [${k.kind}] ${k.title}${k.location ? ` → ${k.location}` : ""}${
+        k.notes ? ` (${k.notes})` : ""
+      }\n`;
+    }
+  }
+  block += `---\n`;
+  return block;
+}
+
+/**
  * Pega o agent que deve rodar para uma stage NO PROJETO indicado.
  * Pega o primeiro enabled por sort_order na agent_definitions, e o claude_agent_id
  * correspondente em agents.
@@ -166,12 +223,14 @@ export async function previewKickoff(
   const attachments = await fetchAttachmentContents(card.feature_id);
   const settings = await getAppSettings(feature.project_id);
 
-  const initial_message = defaultKickoff(
+  const baseMsg = defaultKickoff(
     { ...card, stage: targetStage },
     feature,
     attachments,
     settings
   );
+  const projectBlock = await getProjectContextBlock(feature.project_id);
+  const initial_message = projectBlock ? `${projectBlock}\n${baseMsg}` : baseMsg;
 
   return {
     initial_message,
@@ -218,6 +277,10 @@ export async function startStage(
     userMsg = prependContext ? `${prependContext}\n\n${base}` : base;
   }
 
+  // Injeta o contexto do projeto (tipo de app, stack, instruções, conhecimento)
+  const projectBlock = await getProjectContextBlock(feature.project_id);
+  if (projectBlock) userMsg = `${projectBlock}\n${userMsg}`;
+
   const session = await beta.sessions.create({
     agent: deployed.claude_agent_id,
     environment_id: feature.claude_environment_id,
@@ -262,7 +325,162 @@ export async function startStage(
 }
 
 // ============================================================
-// resolveConflictsWithAgent: dispara o Dev Agent pra integrar os PRs
+// onboardProject / dreamProject: gestão das instruções do projeto
+// ============================================================
+
+/** Cria (ou reusa) um environment de projeto e dispara o primeiro agente disponível. */
+async function runProjectAgentSession(
+  projectId: string,
+  title: string,
+  prompt: string
+): Promise<string> {
+  const sb = createServiceClient();
+  const { data: project } = await sb
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .single();
+  if (!project) throw new Error("projeto não encontrado");
+  if (!project.github_repo) throw new Error("projeto sem repositório configurado");
+
+  // environment de projeto (campo reutilizado em projects)
+  let envId = (project as any).claude_environment_id as string | null;
+  if (!envId) {
+    const env = await beta.environments.create({
+      name: `proj-${project.sigla?.toLowerCase() ?? "env"}-${projectId.slice(0, 6)}`,
+      config: { type: "cloud", networking: { type: "unrestricted" } },
+    });
+    envId = env.id;
+    await sb.from("projects").update({ claude_environment_id: envId }).eq("id", projectId);
+  }
+
+  // usa o Tech Lead do projeto (ou o primeiro agente deployado)
+  let agentId: string | null = null;
+  const { data: tl } = await sb
+    .from("agents")
+    .select("claude_agent_id")
+    .eq("project_id", projectId)
+    .eq("role", "tech_lead")
+    .eq("is_current", true)
+    .maybeSingle();
+  agentId = tl?.claude_agent_id ?? null;
+  if (!agentId) {
+    const { data: any1 } = await sb
+      .from("agents")
+      .select("claude_agent_id")
+      .eq("project_id", projectId)
+      .eq("is_current", true)
+      .limit(1)
+      .maybeSingle();
+    agentId = any1?.claude_agent_id ?? null;
+  }
+  if (!agentId)
+    throw new Error("nenhum agente deployado no projeto; rode o setup de agentes");
+
+  const session = await beta.sessions.create({
+    agent: agentId,
+    environment_id: envId,
+    title,
+  });
+  await beta.sessions.events.send(session.id, {
+    events: [{ type: "user.message", content: [{ type: "text", text: prompt }] }],
+  });
+  return session.id;
+}
+
+/**
+ * Onboarding de aplicação EXISTENTE: o agente mapeia o repositório e gera o
+ * arquivo de instruções (instructions_path) descrevendo arquitetura, convenções
+ * e comandos, além de listar o que entendeu da base de código.
+ */
+export async function onboardProject(projectId: string): Promise<{ session_id: string }> {
+  const sb = createServiceClient();
+  const { data: project } = await sb.from("projects").select("*").eq("id", projectId).single();
+  if (!project) throw new Error("projeto não encontrado");
+  const token = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
+  const instr = project.instructions_path || "CLAUDE.md";
+  const base = project.default_base_branch || "main";
+
+  const prompt =
+    `You are ONBOARDING an existing codebase so future AI agents can work on it ` +
+    `safely. Repository: ${project.github_repo} (${project.app_kind ?? "application"}).\n\n` +
+    `STEPS:\n` +
+    `1. Clone the repo.\n` +
+    `2. Explore the structure: entry points, modules/services, build & test commands, ` +
+    `config, dependencies, data layer, external integrations.\n` +
+    `3. Create/update '${instr}' at the repo root documenting, concisely: overview & ` +
+    `purpose, architecture and main modules, tech stack, how to build/test/run, coding ` +
+    `conventions, branching/PR rules, and known gotchas. This file is the contract ` +
+    `future agents must follow.\n` +
+    `4. Also create docs/ONBOARDING.md with a deeper map (per-module responsibilities, ` +
+    `key flows, where to add things) and a list of risky areas to touch carefully.\n` +
+    `5. Open a branch 'chore/onboarding-instructions' from '${base}' and a PR with these files.\n` +
+    `6. End your turn with: a summary of the architecture you found, the build/test ` +
+    `commands, and the top 5 things a new contributor must know.\n\n` +
+    `--- GitHub credentials ---\n` +
+    `Repo: ${project.github_repo}\nToken: ${token}\n` +
+    `Clone URL: https://x-access-token:${token}@github.com/${project.github_repo}.git\n` +
+    `API auth header: Authorization: token ${token}\nBase branch: ${base}\n---\n` +
+    `Disable git commit signing with -c commit.gpgsign=false. Set a git identity.`;
+
+  const sessionId = await runProjectAgentSession(projectId, `onboarding · ${project.name}`, prompt);
+  await sb.from("projects").update({ onboarded_at: new Date().toISOString() }).eq("id", projectId);
+  return { session_id: sessionId };
+}
+
+/**
+ * "Dreaming": consolida os aprendizados acumulados do projeto no arquivo de
+ * instruções, mantendo-o vivo conforme o time evolui.
+ */
+export async function dreamProject(projectId: string): Promise<{ session_id: string }> {
+  const sb = createServiceClient();
+  const { data: project } = await sb.from("projects").select("*").eq("id", projectId).single();
+  if (!project) throw new Error("projeto não encontrado");
+  const token = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
+  const instr = project.instructions_path || "CLAUDE.md";
+  const base = project.default_base_branch || "main";
+
+  const { data: learnings } = await sb
+    .from("project_learnings")
+    .select("kind, content, created_at")
+    .eq("project_id", projectId)
+    .is("applied_at", null)
+    .order("created_at", { ascending: true });
+
+  const learningList =
+    (learnings ?? []).length > 0
+      ? (learnings ?? []).map((l) => `- [${l.kind}] ${l.content}`).join("\n")
+      : "(no unapplied learnings recorded; infer improvements from the repo history and recent ADRs/QA reports under docs/features/*)";
+
+  const prompt =
+    `This is a "Dreaming" session: consolidate accumulated learnings into the project ` +
+    `instructions so future agents get smarter over time. Repository: ${project.github_repo}.\n\n` +
+    `Accumulated learnings to fold in:\n${learningList}\n\n` +
+    `STEPS:\n` +
+    `1. Clone the repo and read the current '${instr}'.\n` +
+    `2. Integrate the learnings above into '${instr}': new conventions, pitfalls to avoid, ` +
+    `clarified architecture, better build/test guidance. Keep it concise and current — ` +
+    `edit/refine, don't just append. Remove anything now obsolete.\n` +
+    `3. Keep a short CHANGELOG section at the bottom noting what this Dreaming pass changed.\n` +
+    `4. Open a branch 'chore/dreaming-update' from '${base}' and a PR with the updated instructions.\n` +
+    `5. End your turn with a bullet list of what you changed and why.\n\n` +
+    `--- GitHub credentials ---\n` +
+    `Repo: ${project.github_repo}\nToken: ${token}\n` +
+    `Clone URL: https://x-access-token:${token}@github.com/${project.github_repo}.git\n` +
+    `API auth header: Authorization: token ${token}\nBase branch: ${base}\n---\n` +
+    `Disable git commit signing with -c commit.gpgsign=false. Set a git identity.`;
+
+  const sessionId = await runProjectAgentSession(projectId, `dreaming · ${project.name}`, prompt);
+  // marca learnings como aplicados
+  await sb
+    .from("project_learnings")
+    .update({ applied_at: new Date().toISOString() })
+    .eq("project_id", projectId)
+    .is("applied_at", null);
+  return { session_id: sessionId };
+}
+
+
 // dos chunks numa branch de integração, resolvendo conflitos de merge.
 // ============================================================
 export async function resolveConflictsWithAgent(
@@ -1187,13 +1405,15 @@ export async function startNextChunk(cardId: string): Promise<void> {
     .eq("id", nextChunk.id);
 
   // Monta o kickoff específico do chunk
-  const userMsg = chunkKickoff(
+  const baseChunkMsg = chunkKickoff(
     feature,
     nextChunk,
     chosenDef.role,
     attachments,
     settings
   );
+  const projectBlock = await getProjectContextBlock(feature.project_id);
+  const userMsg = projectBlock ? `${projectBlock}\n${baseChunkMsg}` : baseChunkMsg;
 
   const session = await beta.sessions.create({
     agent: deployed.claude_agent_id,

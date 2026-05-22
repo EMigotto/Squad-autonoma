@@ -281,6 +281,12 @@ export default function SettingsPage() {
           </button>
         </section>
 
+        {/* CONHECIMENTO & INSTRUÇÕES */}
+        <KnowledgeSection />
+
+        {/* DREAMING (evolução contínua) */}
+        <DreamingSection />
+
         {/* WORKFLOW DIAGRAM */}
         <section>
           <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
@@ -659,6 +665,165 @@ function PeopleSection() {
   );
 }
 
+function KnowledgeSection() {
+  const [items, setItems] = useState<any[]>([]);
+  const [form, setForm] = useState({ title: "", kind: "doc", location: "", notes: "" });
+  const [onboarding, setOnboarding] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function load() {
+    const res = await fetch("/api/projects/knowledge");
+    const data = await res.json();
+    setItems(data.knowledge ?? []);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function add() {
+    if (!form.title.trim()) return;
+    const res = await fetch("/api/projects/knowledge", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    if (res.ok) { setForm({ title: "", kind: "doc", location: "", notes: "" }); load(); }
+  }
+  async function remove(id: string) {
+    await fetch(`/api/projects/knowledge/${id}`, { method: "DELETE" });
+    load();
+  }
+  async function onboard() {
+    setOnboarding(true); setMsg("");
+    const res = await fetch("/api/projects/onboard", { method: "POST" });
+    const data = await res.json();
+    setMsg(res.ok ? "agente de onboarding disparado — acompanhe o PR de instruções no GitHub." : `erro: ${data.error}`);
+    setOnboarding(false);
+  }
+
+  return (
+    <section>
+      <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">// conhecimento & instruções</h2>
+      <div className="text-xs text-ink-400 mb-4 leading-relaxed">
+        Documentos, runbooks, ADRs, convenções e links que os agentes devem
+        consultar. Esse contexto é injetado nos kickoffs. Para aplicações
+        existentes, use “mapear repositório” para o agente gerar as instruções a
+        partir do código.
+      </div>
+
+      <button
+        onClick={onboard}
+        disabled={onboarding}
+        className="mb-4 border border-development text-development px-3 py-1.5 text-xs hover:bg-development/10 disabled:opacity-50"
+      >
+        {onboarding ? "disparando agente…" : "🔍 mapear repositório e gerar instruções (app existente)"}
+      </button>
+      {msg && <div className="text-[11px] text-ink-300 mb-3 font-mono">{msg}</div>}
+
+      {items.length > 0 && (
+        <div className="space-y-1 mb-3">
+          {items.map((k) => (
+            <div key={k.id} className="border border-ink-700 bg-ink-900/40 px-3 py-2 flex items-center gap-2 text-sm">
+              <span className="text-[9px] uppercase text-development border border-development/40 px-1 py-0.5">{k.kind}</span>
+              <span className="text-ink-100">{k.title}</span>
+              {k.location && <span className="text-[11px] text-ink-400 font-mono">{k.location}</span>}
+              <button onClick={() => remove(k.id)} className="ml-auto text-qa hover:underline text-xs">remover</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="grid grid-cols-4 gap-2 items-end">
+        <SimpleField label="título" value={form.title} onChange={(v) => setForm({ ...form, title: v })} placeholder="ex: Arquitetura do serviço" />
+        <div>
+          <label className="text-[11px] text-ink-400 block mb-1">tipo</label>
+          <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}
+            className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none">
+            <option value="doc">doc</option>
+            <option value="runbook">runbook</option>
+            <option value="adr">ADR</option>
+            <option value="convention">convenção</option>
+            <option value="api">API</option>
+            <option value="link">link</option>
+          </select>
+        </div>
+        <SimpleField label="caminho ou URL" value={form.location} onChange={(v) => setForm({ ...form, location: v })} placeholder="docs/arch.md ou https://…" />
+        <button onClick={add} className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300">+ adicionar</button>
+      </div>
+    </section>
+  );
+}
+
+function DreamingSection() {
+  const [learnings, setLearnings] = useState<any[]>([]);
+  const [content, setContent] = useState("");
+  const [dreaming, setDreaming] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function load() {
+    const res = await fetch("/api/projects/dreaming");
+    const data = await res.json();
+    setLearnings(data.learnings ?? []);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function addLearning() {
+    if (!content.trim()) return;
+    await fetch("/api/projects/dreaming", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "add", content }),
+    });
+    setContent(""); load();
+  }
+  async function dream() {
+    setDreaming(true); setMsg("");
+    const res = await fetch("/api/projects/dreaming", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    setMsg(res.ok ? "Dreaming disparado — o agente vai consolidar os aprendizados nas instruções e abrir um PR." : `erro: ${data.error}`);
+    setDreaming(false);
+    load();
+  }
+
+  const pending = learnings.filter((l) => !l.applied_at);
+
+  return (
+    <section>
+      <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">// dreaming (evolução contínua)</h2>
+      <div className="text-xs text-ink-400 mb-4 leading-relaxed">
+        Aprendizados acumulados do projeto (decisões, padrões, armadilhas). O
+        “Dreaming” consolida esses aprendizados no arquivo de instruções, fazendo
+        os agentes ficarem mais inteligentes a cada ciclo.
+      </div>
+
+      <div className="flex gap-2 mb-4">
+        <input value={content} onChange={(e) => setContent(e.target.value)}
+          placeholder="registrar um aprendizado (ex: 'sempre validar CPF na camada de domínio')"
+          className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
+        <button onClick={addLearning} className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300">+ registrar</button>
+        <button onClick={dream} disabled={dreaming}
+          className="bg-planning text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-planning/80 disabled:opacity-50">
+          {dreaming ? "sonhando…" : "💭 consolidar (dreaming)"}
+        </button>
+      </div>
+      {msg && <div className="text-[11px] text-ink-300 mb-3 font-mono">{msg}</div>}
+
+      {learnings.length === 0 ? (
+        <div className="text-xs text-ink-400 italic">nenhum aprendizado ainda. Registre acima ou deixe o Dreaming inferir do repositório.</div>
+      ) : (
+        <div className="space-y-1">
+          <div className="text-[11px] text-ink-400">{pending.length} pendente(s) de consolidação</div>
+          {learnings.map((l) => (
+            <div key={l.id} className={`border px-3 py-2 text-sm ${l.applied_at ? "border-ink-800 text-ink-400" : "border-ink-700 text-ink-100"}`}>
+              <span className="text-[9px] uppercase border border-ink-600 px-1 py-0.5 mr-2">{l.kind}</span>
+              {l.content}
+              {l.applied_at && <span className="text-[10px] text-qa ml-2">✓ consolidado</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ProjectsSection() {
   const [projects, setProjects] = useState<any[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -669,6 +834,10 @@ function ProjectsSection() {
     sigla: "",
     github_repo: "",
     default_base_branch: "main",
+    app_type: "new",
+    app_kind: "app",
+    tech_stack: "",
+    instructions_path: "CLAUDE.md",
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -770,6 +939,64 @@ function ProjectsSection() {
               placeholder="main"
             />
           </div>
+
+          <div className="border-t border-ink-800 pt-3">
+            <div className="text-[11px] uppercase tracking-widest text-ink-400 mb-2">
+              tipo de aplicação
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] text-ink-400 block mb-1">é nova ou existente?</label>
+                <select
+                  value={form.app_type}
+                  onChange={(e) => setForm({ ...form, app_type: e.target.value })}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+                >
+                  <option value="new">Nova (greenfield)</option>
+                  <option value="existing">Existente (legado)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] text-ink-400 block mb-1">natureza</label>
+                <select
+                  value={form.app_kind}
+                  onChange={(e) => setForm({ ...form, app_kind: e.target.value })}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+                >
+                  <option value="app">Aplicação / Web app</option>
+                  <option value="microservice">Microsserviço</option>
+                  <option value="monolith">Monólito</option>
+                  <option value="library">Biblioteca / SDK</option>
+                  <option value="other">Outro</option>
+                </select>
+              </div>
+              <SimpleField
+                label="stack (tecnologias)"
+                value={form.tech_stack}
+                onChange={(v) => setForm({ ...form, tech_stack: v })}
+                placeholder="ex: Java Spring, Postgres, Kafka"
+              />
+              <SimpleField
+                label="arquivo de instruções"
+                value={form.instructions_path}
+                onChange={(v) => setForm({ ...form, instructions_path: v })}
+                placeholder="CLAUDE.md"
+              />
+            </div>
+            {form.app_type === "existing" ? (
+              <div className="text-[10px] text-development mt-2 leading-relaxed">
+                aplicação existente: depois de criar, use “mapear repositório” na
+                seção de conhecimento para o agente ler o código e gerar as
+                instruções, e cadastre os documentos/runbooks que já existem.
+              </div>
+            ) : (
+              <div className="text-[10px] text-ink-400 mt-2 leading-relaxed">
+                aplicação nova: os agentes vão criar o arquivo de instruções no
+                repositório conforme constroem, e o Dreaming mantém vivo.
+              </div>
+            )}
+          </div>
+
           {error && (
             <div className="text-xs text-qa font-mono">{error}</div>
           )}

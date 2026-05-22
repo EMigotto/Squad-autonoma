@@ -77,6 +77,10 @@ export async function POST(req: Request) {
         sigla: body.sigla.toUpperCase().slice(0, 10),
         github_repo: body.github_repo ?? null,
         default_base_branch: body.default_base_branch ?? "main",
+        app_type: body.app_type === "existing" ? "existing" : "new",
+        app_kind: body.app_kind ?? null,
+        tech_stack: body.tech_stack ?? null,
+        instructions_path: body.instructions_path || "CLAUDE.md",
         created_by: user.id,
       })
       .select()
