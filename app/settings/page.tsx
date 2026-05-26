@@ -476,6 +476,8 @@ export default function SettingsPage() {
         </>
         )}
 
+        {tab === "agents" && <ClaudeCodeSection />}
+
         {tab === "workflow" && (
         <>
         <section>
@@ -1309,6 +1311,112 @@ function ReposManager() {
       </div>
       {error && <div className="text-xs text-qa font-mono mt-2">{error}</div>}
     </div>
+  );
+}
+
+function ClaudeCodeSection() {
+  const [token, setToken] = useState<string | null>(null);
+  const [hasToken, setHasToken] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [origin, setOrigin] = useState("");
+
+  async function load() {
+    const res = await fetch("/api/mcp-token");
+    const data = await res.json();
+    setHasToken(data.has_token);
+    setToken(data.token ?? null);
+    setLoading(false);
+  }
+  useEffect(() => {
+    setOrigin(window.location.origin);
+    load();
+  }, []);
+
+  async function generate() {
+    const res = await fetch("/api/mcp-token", { method: "POST" });
+    const data = await res.json();
+    if (data.token) {
+      setToken(data.token);
+      setHasToken(true);
+    }
+  }
+  async function revoke() {
+    await fetch("/api/mcp-token", { method: "DELETE" });
+    setToken(null);
+    setHasToken(false);
+  }
+
+  const url = `${origin}/api/mcp/mcp`;
+  const cmd = `claude mcp add --transport http squad ${url} --header "Authorization: Bearer ${token ?? "SEU_TOKEN"}"`;
+
+  return (
+    <section>
+      <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
+        // conector claude code (fase 1 — leitura)
+      </h2>
+      <div className="text-xs text-ink-400 mb-4 leading-relaxed">
+        Trabalhe no Claude Code com todo o harness e puxe o contexto dos cards da
+        Squad. Nesta fase é só leitura: as tools{" "}
+        <span className="font-mono text-ink-200">squad_list_cards</span> e{" "}
+        <span className="font-mono text-ink-200">squad_get_context</span> trazem
+        cards, instruções do projeto, critérios e ADR para a sua sessão. A
+        submissão e o avanço de etapas continuam pela Squad.
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-ink-400">carregando…</div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            {hasToken ? (
+              <>
+                <span className="text-xs text-qa">● token ativo</span>
+                <button onClick={generate} className="text-xs text-development hover:underline">
+                  regenerar
+                </button>
+                <button onClick={revoke} className="text-xs text-qa hover:underline">
+                  revogar
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={generate}
+                className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300"
+              >
+                gerar token de acesso
+              </button>
+            )}
+          </div>
+
+          {token && (
+            <div className="border border-planning/40 bg-planning/5 p-2 text-[11px] text-planning font-mono break-all">
+              {token}
+              <div className="text-ink-400 mt-1">
+                copie agora — guarde em local seguro. Trate como uma senha.
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div className="text-[11px] text-ink-400 mb-1">
+              1 · conecte o conector no seu Claude Code:
+            </div>
+            <pre className="border border-ink-700 bg-ink-950 p-2 text-[11px] text-ink-100 font-mono overflow-x-auto whitespace-pre-wrap break-all">
+{cmd}
+            </pre>
+          </div>
+          <div className="text-[11px] text-ink-400 leading-relaxed">
+            2 · no Claude Code, rode{" "}
+            <span className="font-mono text-ink-200">/mcp__squad__squad_list_cards</span>{" "}
+            para ver os cards, e{" "}
+            <span className="font-mono text-ink-200">
+              /mcp__squad__squad_get_context
+            </span>{" "}
+            com o slug ou card_id para puxar todo o contexto.
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
