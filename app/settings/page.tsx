@@ -83,6 +83,26 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<
     "people" | "knowledge" | "agents" | "workflow"
   >("people");
+  const [configuring, setConfiguring] = useState(false);
+  const [activeName, setActiveName] = useState("");
+
+  useEffect(() => {
+    const hasCfg =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).has("config");
+    setConfiguring(!!hasCfg);
+    if (hasCfg) {
+      fetch("/api/projects")
+        .then((r) => r.json())
+        .then((d) => {
+          const a = (d.projects ?? []).find(
+            (p: any) => p.id === d.active_project_id
+          );
+          setActiveName(a?.name ?? "");
+        })
+        .catch(() => {});
+    }
+  }, []);
   const [showAgentEditor, setShowAgentEditor] = useState(false);
   const [creatingNew, setCreatingNew] = useState(false);
   const [consoleAgents, setConsoleAgents] = useState<any[]>([]);
@@ -219,7 +239,29 @@ export default function SettingsPage() {
         </div>
 
         {/* PROJETOS */}
-        <ProjectsSection />
+        <ProjectsSection configuringId={configuring} />
+
+        {configuring && (
+        <div key="config-panel" className="space-y-8">
+          <div className="flex items-center justify-between border border-discovery/40 bg-discovery/5 px-4 py-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-ink-400">
+                configurando o time
+              </div>
+              <div className="text-base font-semibold text-ink-100">
+                {activeName || "—"}
+              </div>
+            </div>
+            <a
+              href="/settings"
+              className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100"
+            >
+              ← lista de times
+            </a>
+          </div>
+
+        {/* APLICAÇÕES */}
+        <ReposManager />
 
         {/* AMBIENTES */}
         <EnvironmentsSection />
@@ -591,7 +633,10 @@ export default function SettingsPage() {
         </section>
         </>
         )}
+        </div>
+        )}
 
+        {configuring && (
         <div className="pt-4 border-t border-ink-700 flex items-center justify-between">
           {error && <div className="text-xs text-qa font-mono">{error}</div>}
           {saved && <div className="text-xs text-qa">salvo ✓</div>}
@@ -605,6 +650,7 @@ export default function SettingsPage() {
             </button>
           </div>
         </div>
+        )}
       </div>
 
       {showAgentEditor && (
@@ -1028,7 +1074,7 @@ function DreamingSection() {
   );
 }
 
-function ProjectsSection() {
+function ProjectsSection({ configuringId }: { configuringId?: boolean }) {
   const [projects, setProjects] = useState<any[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1083,7 +1129,7 @@ function ProjectsSection() {
       body: JSON.stringify({ project_id: data.project.id }),
     });
     await fetch("/api/admin/setup-agents", { method: "POST" });
-    window.location.reload();
+    window.location.href = `/settings?config=${data.project.id}`;
   }
 
   async function activate(id: string) {
@@ -1092,27 +1138,28 @@ function ProjectsSection() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ project_id: id }),
     });
-    window.location.reload();
+    window.location.href = `/settings?config=${id}`;
   }
 
   return (
     <section>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm uppercase tracking-widest text-ink-400">
-          // times e projetos
+          // times
         </h2>
         <button
           onClick={() => setCreating(!creating)}
           className="bg-ink-100 text-ink-950 px-3 py-1.5 text-xs font-semibold hover:bg-ink-300 transition-colors"
         >
-          {creating ? "fechar" : "+ novo projeto"}
+          {creating ? "fechar" : "+ novo time"}
         </button>
       </div>
 
       <div className="text-xs text-ink-400 mb-4 leading-relaxed">
-        Cada projeto tem nome, sigla e repositório próprios, e carrega suas
-        próprias configurações de agentes e settings. Trocar de projeto no
-        seletor do board muda todo o contexto.
+        Clique em <strong>configurar</strong> num time para abrir todas as suas
+        configurações (aplicações, ambientes, pessoas, custos, conhecimento,
+        agentes, workflow, gates e notificações). Cada time é independente; o
+        seletor do board alterna entre eles.
       </div>
 
       {creating && (
@@ -1206,23 +1253,23 @@ function ProjectsSection() {
           )}
           <div className="text-[10px] text-ink-400">
             ao criar, os 7 agentes builtin são semeados e deployados
-            automaticamente neste projeto.
+            automaticamente neste time.
           </div>
           <button
             onClick={createProject}
             disabled={saving}
             className="bg-discovery text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-discovery/80 disabled:opacity-50"
           >
-            {saving ? "criando + deployando agentes..." : "criar projeto"}
+            {saving ? "criando time + deployando agentes..." : "criar time"}
           </button>
         </div>
       )}
 
       {loading ? (
-        <div className="text-xs text-ink-400">carregando projetos...</div>
+        <div className="text-xs text-ink-400">carregando times...</div>
       ) : projects.length === 0 ? (
         <div className="text-xs text-ink-400 italic border border-dashed border-ink-800 p-4">
-          nenhum projeto ainda. Crie o primeiro acima.
+          nenhum time ainda. Crie o primeiro acima.
         </div>
       ) : (
         <div className="space-y-2">
@@ -1250,21 +1297,16 @@ function ProjectsSection() {
                   {p.team?.name && ` · time: ${p.team.name}`}
                 </div>
               </div>
-              {p.id !== activeId && (
-                <button
-                  onClick={() => activate(p.id)}
-                  className="text-xs text-development hover:underline px-2"
-                >
-                  ativar
-                </button>
-              )}
+              <button
+                onClick={() => activate(p.id)}
+                className="text-xs text-development hover:underline px-2 uppercase tracking-widest"
+              >
+                {p.id === activeId && configuringId ? "configurando" : "configurar →"}
+              </button>
             </div>
           ))}
         </div>
       )}
-
-      {/* Repositórios do projeto ativo */}
-      <ReposManager />
     </section>
   );
 }
@@ -1323,7 +1365,7 @@ function ReposManager() {
   }
 
   async function removeRepo(id: string) {
-    if (!confirm("remover este repositório do projeto?")) return;
+    if (!confirm("remover esta aplicação do time?")) return;
     const res = await fetch(`/api/projects/repos?id=${id}`, { method: "DELETE" });
     if (res.ok) {
       load();
@@ -1336,7 +1378,7 @@ function ReposManager() {
   return (
     <div className="mt-6 pt-6 border-t border-ink-800">
       <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
-        // repositórios do projeto ativo ({repos.length})
+        // aplicações do time ({repos.length})
       </div>
       <div className="text-xs text-ink-400 mb-3 leading-relaxed">
         Um projeto pode ter vários repositórios. Ao criar uma feature, você
@@ -1349,7 +1391,7 @@ function ReposManager() {
         <div className="space-y-2 mb-3">
           {repos.length === 0 && (
             <div className="text-xs text-ink-400 italic">
-              nenhum repositório ainda
+              nenhuma aplicação ainda
             </div>
           )}
           {repos.map((r) => (
