@@ -7,6 +7,21 @@
 -- Defensiva e idempotente.
 -- ============================================================
 
+-- Garante a coluna features.repository_id (caso a v11 não tenha sido aplicada)
+ALTER TABLE features ADD COLUMN IF NOT EXISTS repository_id UUID REFERENCES project_repositories(id);
+
+-- Backfill: associa cada feature à aplicação correspondente (project_id + github_repo)
+UPDATE features f
+SET repository_id = (
+  SELECT r.id FROM project_repositories r
+  WHERE r.project_id = f.project_id
+    AND r.github_repo = f.github_repo
+  LIMIT 1
+)
+WHERE f.repository_id IS NULL
+  AND f.project_id IS NOT NULL
+  AND f.github_repo IS NOT NULL;
+
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS repository_id UUID REFERENCES project_repositories(id) ON DELETE CASCADE;
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS branch TEXT;
 
