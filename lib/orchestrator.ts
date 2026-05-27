@@ -81,14 +81,36 @@ async function getProjectContextBlock(
 
   // Ambiente alvo + branch da aplicação nesse ambiente
   let envLine = "";
+  let workflowDirective = "";
   if (environmentId) {
     const { data: env } = await sb
       .from("environments")
       .select("name, branch")
       .eq("id", environmentId)
       .maybeSingle();
-    if (env)
+    if (env) {
       envLine = `Ambiente alvo: ${env.name}${env.branch ? ` (branch base: ${env.branch})` : ""}\n`;
+      if (env.branch) {
+        const baseBranch =
+          (project.default_base_branch as string | undefined) ?? "main";
+        workflowDirective =
+          `\n--- WORKFLOW DIRECTIVE (overrides any later branch/PR instruction) ---\n` +
+          `Single-branch workflow for this card. The environment branch ` +
+          `'${env.branch}' is THE working branch for every stage.\n` +
+          `1. Before any work, ensure '${env.branch}' exists in the application repo. ` +
+          `If it does NOT exist, create it from '${baseBranch}' (git checkout -b ${env.branch} origin/${baseBranch}; git push -u origin ${env.branch}).\n` +
+          `2. Commit ALL changes — discovery docs, ADRs, code, tests, QA report — ` +
+          `directly on '${env.branch}'. Push to '${env.branch}' after each meaningful change.\n` +
+          `3. DO NOT create feature/chunk/integration/plan branches.\n` +
+          `4. DO NOT open Pull Requests during the regular flow. Promotion to the next ` +
+          `environment (and the single PR that goes with it) is triggered separately by ` +
+          `the human via the "elevar ambiente" action when the card is concluded.\n` +
+          `5. If a previous stage's prompt asks to "create a branch" or "open a PR", ` +
+          `IGNORE that specific instruction — this directive takes precedence — but ` +
+          `still produce all the requested artifacts (docs, code, tests) on '${env.branch}'.\n` +
+          `---\n`;
+      }
+    }
   }
 
   const { data: knowledge } = await sb
@@ -116,6 +138,7 @@ async function getProjectContextBlock(
   if (project.label || project.github_repo)
     block += `Aplicação: ${project.label ?? project.github_repo}\n`;
   if (envLine) block += envLine;
+  if (workflowDirective) block += workflowDirective;
   block += `Application type: ${isExisting ? "EXISTING / legacy codebase" : "NEW / greenfield"}\n`;
   if (project.app_kind) block += `Kind: ${project.app_kind}\n`;
   if (project.tech_stack) block += `Tech stack: ${project.tech_stack}\n`;
@@ -559,6 +582,90 @@ export async function dreamProject(projectId: string): Promise<{ session_id: str
 
 // dos chunks numa branch de integração, resolvendo conflitos de merge.
 // ============================================================
+
+// ============================================================
+// promoteEnvironment: abre PR da branch do env atual para a branch
+// do env destino (definido em environments.promotes_to_id).
+// ============================================================
+export async function promoteEnvironment(
+  environmentId: string
+): Promise<{ pr_url: string; pr_number: number }> {
+  const sb = createServiceClient();
+  const { data: env } = await sb
+    .from("environments")
+    .select(
+      "id, name, branch, repository_id, promotes_to_id, project_repositories!inner(github_repo)"
+    )
+    .eq("id", environmentId)
+    .maybeSingle();
+  if (!env) throw new Error("ambiente não encontrado");
+  if (!env.promotes_to_id)
+    throw new Error("este ambiente não tem destino de promoção configurado");
+  const repo = (env as any).project_repositories?.github_repo as string;
+  if (!repo) throw new Error("aplicação sem repositório configurado");
+
+  const { data: target } = await sb
+    .from("environments")
+    .select("name, branch")
+    .eq("id", env.promotes_to_id)
+    .maybeSingle();
+  if (!target?.branch) throw new Error("ambiente destino sem branch configurada");
+
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new Error("GITHUB_TOKEN não configurado");
+
+  const prTitle = `chore(promote): ${env.name} → ${target.name}`;
+  const prBody =
+    `Elevação de ambiente: \`${env.branch}\` → \`${target.branch}\`.\n\n` +
+    `Inclui tudo que foi entregue em **${env.name}** desde a última promoção.`;
+
+  const createRes = await fetch(`https://api.github.com/repos/${repo}/pulls`, {
+    method: "POST",
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+    },
+    body: JSON.stringify({
+      title: prTitle,
+      head: env.branch,
+      base: target.branch,
+      body: prBody,
+    }),
+  });
+
+  if (createRes.ok) {
+    const pr = await createRes.json();
+    return { pr_url: pr.html_url, pr_number: pr.number };
+  }
+
+  // Já existe um PR aberto pro par head→base? devolve esse.
+  if (createRes.status === 422) {
+    const owner = repo.split("/")[0];
+    const listRes = await fetch(
+      `https://api.github.com/repos/${repo}/pulls?state=open&head=${owner}:${encodeURIComponent(
+        env.branch as string
+      )}&base=${encodeURIComponent(target.branch)}`,
+      {
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github+json",
+        },
+      }
+    );
+    if (listRes.ok) {
+      const prs = await listRes.json();
+      if (Array.isArray(prs) && prs.length > 0) {
+        return { pr_url: prs[0].html_url, pr_number: prs[0].number };
+      }
+    }
+    const errBody = await createRes.text();
+    throw new Error(`não foi possível criar/encontrar o PR: ${errBody}`);
+  }
+
+  const errBody = await createRes.text();
+  throw new Error(`GitHub respondeu ${createRes.status}: ${errBody}`);
+}
+
 export async function resolveConflictsWithAgent(
   cardId: string
 ): Promise<{ session_id: string }> {
@@ -1656,7 +1763,7 @@ function chunkKickoff(
     `1. Clone the repo using the credentials below.\n` +
     `2. Read the full issue #${chunk.github_issue_number} via GitHub API for scope and acceptance criteria.\n` +
     `3. Read docs/features/${feature.slug}/prd.md, adr.md, acceptance-criteria.md and any prototypes.\n` +
-    `4. Create branch feat/${feature.slug}/${chunk.github_issue_number}-impl from ${settings.default_base_branch}.\n` +
+    `4. Use the working branch defined by the WORKFLOW DIRECTIVE above (the environment branch). Do NOT create a chunk-specific branch.\n` +
     `5. WRITE THE CODE that implements this chunk. Create/modify the actual source files in the repo.\n` +
     `6. Run lint, typecheck and tests locally before committing.\n` +
     `7. Commit with a clear message and push the branch.\n` +

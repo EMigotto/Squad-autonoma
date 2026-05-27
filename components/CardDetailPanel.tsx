@@ -657,6 +657,10 @@ export default function CardDetailPanel({
               </Section>
             )}
 
+            {isTerminal && card.stage === "done" && (
+              <PromoteSection cardId={cardId} />
+            )}
+
             {isTerminal && (
               <Section title="card finalizado">
                 <div className="text-xs text-ink-400 mb-3">
@@ -1058,6 +1062,59 @@ function MetricsPanel({
           >
             ajustar cobertura / horas humanas
           </button>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function PromoteSection({ cardId }: { cardId: string }) {
+  const [promoting, setPromoting] = useState(false);
+  const [result, setResult] = useState<{ pr_url?: string; error?: string }>({});
+
+  async function promote() {
+    setPromoting(true);
+    setResult({});
+    try {
+      const res = await fetch(`/api/cards/${cardId}/promote`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) setResult({ error: data.error ?? `HTTP ${res.status}` });
+      else setResult({ pr_url: data.pr_url });
+    } catch (e) {
+      setResult({ error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setPromoting(false);
+    }
+  }
+
+  return (
+    <Section title="elevar ambiente">
+      <div className="text-xs text-ink-400 mb-3 leading-relaxed">
+        Abre um único Pull Request da branch do ambiente atual para a branch do
+        ambiente destino (definido na configuração da aplicação como{" "}
+        <span className="text-ink-200">promove para</span>). O PR carrega tudo
+        que foi entregue neste ambiente desde a última promoção.
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={promote}
+          disabled={promoting}
+          className="bg-qa text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-qa/80 disabled:opacity-50"
+        >
+          {promoting ? "abrindo PR…" : "elevar ambiente →"}
+        </button>
+        {result.pr_url && (
+          <a
+            href={result.pr_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-development hover:underline"
+          >
+            PR aberto: {result.pr_url} ↗
+          </a>
+        )}
+        {result.error && (
+          <span className="text-xs text-qa">erro: {result.error}</span>
         )}
       </div>
     </Section>

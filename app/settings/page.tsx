@@ -696,29 +696,92 @@ function AppEnvironments({ repositoryId, baseBranch }: { repositoryId: string; b
       body: JSON.stringify({ branch: b }),
     });
   }
+  async function setPromotesTo(id: string, targetId: string) {
+    await fetch(`/api/environments/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ promotes_to_id: targetId || null }),
+    });
+    setEnvs((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, promotes_to_id: targetId || null } : e))
+    );
+  }
+
+  // Cadeia de promoção: começa pelos envs que ninguém promove para, e segue promotes_to_id
+  const byId = Object.fromEntries(envs.map((e) => [e.id, e]));
+  const pointedTo = new Set(envs.map((e) => e.promotes_to_id).filter(Boolean));
+  const roots = envs.filter((e) => !pointedTo.has(e.id));
+  const chains: any[][] = [];
+  for (const r of roots) {
+    const chain: any[] = [];
+    let cur: any = r;
+    const seen = new Set<string>();
+    while (cur && !seen.has(cur.id)) {
+      chain.push(cur);
+      seen.add(cur.id);
+      cur = cur.promotes_to_id ? byId[cur.promotes_to_id] : null;
+    }
+    if (chain.length) chains.push(chain);
+  }
 
   return (
     <div className="mt-3 pl-3 border-l border-ink-800">
       <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
         ambientes (branches) desta aplicação
       </div>
+
+      {/* Cadeia hierárquica */}
+      {chains.length > 0 && (
+        <div className="mb-3 text-[11px] flex flex-wrap items-center gap-1">
+          <span className="text-ink-500">hierarquia:</span>
+          {chains.map((chain, i) => (
+            <span key={i} className="flex items-center gap-1">
+              {chain.map((e, j) => (
+                <span key={e.id} className="flex items-center gap-1">
+                  <span className="border border-ink-700 px-1.5 py-0.5 text-ink-200">
+                    {e.name}
+                    <span className="text-ink-500 font-mono ml-1">{e.branch}</span>
+                  </span>
+                  {j < chain.length - 1 && <span className="text-discovery">→</span>}
+                </span>
+              ))}
+              {i < chains.length - 1 && <span className="text-ink-600 mx-1">·</span>}
+            </span>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <div className="text-[11px] text-ink-500">carregando…</div>
       ) : (
-        <div className="space-y-1 mb-2">
+        <div className="space-y-2 mb-2">
           {envs.map((e) => (
-            <div key={e.id} className="flex items-center gap-2 text-sm">
-              <span className="text-ink-200 w-40 truncate">{e.name}</span>
-              <span className="text-ink-500 text-xs">→</span>
-              <input
-                defaultValue={e.branch}
-                onBlur={(ev) => saveBranch(e.id, ev.target.value)}
-                className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono text-ink-100 focus:border-discovery focus:outline-none"
-              />
-              {e.is_default && (
-                <span className="text-[9px] uppercase text-qa border border-qa/40 px-1 py-0.5">default</span>
-              )}
-              <button onClick={() => remove(e.id)} className="text-qa hover:underline text-[11px]">remover</button>
+            <div key={e.id} className="border border-ink-800 bg-ink-950 p-2 space-y-1">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-ink-200 w-40 truncate">{e.name}</span>
+                <span className="text-ink-500 text-xs">→</span>
+                <input
+                  defaultValue={e.branch}
+                  onBlur={(ev) => saveBranch(e.id, ev.target.value)}
+                  className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono text-ink-100 focus:border-discovery focus:outline-none"
+                />
+                {e.is_default && (
+                  <span className="text-[9px] uppercase text-qa border border-qa/40 px-1 py-0.5">default</span>
+                )}
+                <button onClick={() => remove(e.id)} className="text-qa hover:underline text-[11px]">remover</button>
+              </div>
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-ink-500 w-40">promove para:</span>
+                <select
+                  value={e.promotes_to_id ?? ""}
+                  onChange={(ev) => setPromotesTo(e.id, ev.target.value)}
+                  className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1 text-xs text-ink-100 focus:border-discovery focus:outline-none"
+                >
+                  <option value="">— nenhum (topo da cadeia) —</option>
+                  {envs.filter((o) => o.id !== e.id).map((o) => (
+                    <option key={o.id} value={o.id}>{o.name} ({o.branch})</option>
+                  ))}
+                </select>
+              </div>
             </div>
           ))}
           {envs.length === 0 && (

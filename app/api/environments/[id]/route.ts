@@ -12,6 +12,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const patch: any = {};
   if ("name" in body) patch.name = body.name;
   if ("branch" in body) patch.branch = body.branch || "main";
+  if ("promotes_to_id" in body)
+    patch.promotes_to_id = body.promotes_to_id || null;
   const svc = createServiceClient();
   const { error } = await svc.from("environments").update(patch).eq("id", params.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
