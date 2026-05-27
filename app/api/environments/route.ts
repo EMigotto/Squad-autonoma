@@ -4,43 +4,36 @@ import { getActiveProjectId } from "@/lib/projects";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+// GET ?repository_id=X -> ambientes daquela aplicação.
+// Sem repository_id -> todos os ambientes das aplicações do time ativo.
+export async function GET(req: Request) {
   const sb = createClient();
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const projectId = await getActiveProjectId(user.id);
-  if (!projectId) return NextResponse.json({ environments: [], applications: [] });
+  const url = new URL(req.url);
+  const repositoryId = url.searchParams.get("repository_id");
   const svc = createServiceClient();
 
-  const { data: applications } = await svc
-    .from("project_repositories")
-    .select("id, label, github_repo, default_base_branch")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: true });
-
-  const { data: envs } = await svc
-    .from("environments")
-    .select("id, name, is_default, sort_order")
-    .eq("project_id", projectId)
-    .order("sort_order", { ascending: true });
-
-  const ids = (envs ?? []).map((e) => e.id);
-  let branches: any[] = [];
-  if (ids.length) {
-    const { data: b } = await svc
-      .from("environment_branches")
-      .select("environment_id, repository_id, branch")
-      .in("environment_id", ids);
-    branches = b ?? [];
+  if (repositoryId) {
+    const { data } = await svc
+      .from("environments")
+      .select("id, name, branch, is_default, sort_order, repository_id")
+      .eq("repository_id", repositoryId)
+      .order("sort_order", { ascending: true });
+    return NextResponse.json({ environments: data ?? [] });
   }
 
-  const environments = (envs ?? []).map((e) => ({
-    ...e,
-    branches: branches.filter((b) => b.environment_id === e.id),
-  }));
-  return NextResponse.json({ environments, applications: applications ?? [] });
+  const projectId = await getActiveProjectId(user.id);
+  if (!projectId) return NextResponse.json({ environments: [] });
+  const { data } = await svc
+    .from("environments")
+    .select("id, name, branch, is_default, sort_order, repository_id")
+    .eq("project_id", projectId)
+    .order("sort_order", { ascending: true });
+  return NextResponse.json({ environments: data ?? [] });
 }
 
+// POST { repository_id, name, branch } -> cria ambiente (branch) da aplicação
 export async function POST(req: Request) {
   const sb = createClient();
   const { data: { user } } = await sb.auth.getUser();
@@ -48,27 +41,20 @@ export async function POST(req: Request) {
   const projectId = await getActiveProjectId(user.id);
   if (!projectId) return NextResponse.json({ error: "nenhum time ativo" }, { status: 400 });
   const body = await req.json();
+  if (!body.repository_id) return NextResponse.json({ error: "repository_id obrigatório" }, { status: 400 });
   if (!body.name) return NextResponse.json({ error: "nome obrigatório" }, { status: 400 });
   const svc = createServiceClient();
-
-  const { data: env, error } = await svc
+  const { data, error } = await svc
     .from("environments")
-    .insert({ project_id: projectId, name: body.name, sort_order: body.sort_order ?? 0 })
+    .insert({
+      project_id: projectId,
+      repository_id: body.repository_id,
+      name: body.name,
+      branch: body.branch || "main",
+      sort_order: body.sort_order ?? 0,
+    })
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  // seed: cada aplicação aponta para sua branch base por padrão
-  const { data: apps } = await svc
-    .from("project_repositories")
-    .select("id, default_base_branch")
-    .eq("project_id", projectId);
-  for (const a of apps ?? []) {
-    await svc.from("environment_branches").insert({
-      environment_id: env.id,
-      repository_id: a.id,
-      branch: a.default_base_branch ?? "main",
-    });
-  }
-  return NextResponse.json({ environment: env });
+  return NextResponse.json({ environment: data });
 }

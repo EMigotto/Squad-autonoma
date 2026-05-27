@@ -56,16 +56,25 @@ export default function CreateFeatureDialog({
         if (data.repos?.length) setSelectedRepoId(data.repos[0].id);
       })
       .catch(() => {});
-    fetch("/api/environments")
+  }, []);
+
+  // Ambientes pertencem à Aplicação: recarrega quando a aplicação muda
+  useEffect(() => {
+    if (!selectedRepoId) {
+      setEnvironments([]);
+      setSelectedEnvId("");
+      return;
+    }
+    fetch(`/api/environments?repository_id=${selectedRepoId}`)
       .then((r) => r.json())
       .then((data) => {
-        setEnvironments(data.environments ?? []);
-        const def = (data.environments ?? []).find((e: any) => e.is_default);
-        if (def) setSelectedEnvId(def.id);
-        else if (data.environments?.length) setSelectedEnvId(data.environments[0].id);
+        const envs = data.environments ?? [];
+        setEnvironments(envs);
+        const def = envs.find((e: any) => e.is_default) ?? envs[0];
+        setSelectedEnvId(def?.id ?? "");
       })
       .catch(() => {});
-  }, []);
+  }, [selectedRepoId]);
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? []);
@@ -286,7 +295,7 @@ export default function CreateFeatureDialog({
               </label>
               {environments.length === 0 ? (
                 <div className="text-[11px] text-planning border border-planning/40 bg-planning/5 p-2">
-                  nenhum ambiente no time. Crie em /settings → ambientes.
+                  nenhum ambiente nesta aplicação. Crie em /settings → aplicação.
                 </div>
               ) : (
                 <select
@@ -294,14 +303,11 @@ export default function CreateFeatureDialog({
                   onChange={(e) => setSelectedEnvId(e.target.value)}
                   className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
                 >
-                  {environments.map((e) => {
-                    const b = (e.branches ?? []).find((x: any) => x.repository_id === selectedRepoId);
-                    return (
-                      <option key={e.id} value={e.id}>
-                        {e.name}{b ? ` → ${b.branch}` : ""}
-                      </option>
-                    );
-                  })}
+                  {environments.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.name}{e.branch ? ` → ${e.branch}` : ""}
+                    </option>
+                  ))}
                 </select>
               )}
             </div>

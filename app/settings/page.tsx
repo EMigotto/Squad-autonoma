@@ -260,11 +260,8 @@ export default function SettingsPage() {
             </a>
           </div>
 
-        {/* APLICAÇÕES */}
+        {/* APLICAÇÕES (cada uma com seus ambientes/branches) */}
         <ReposManager />
-
-        {/* AMBIENTES */}
-        <EnvironmentsSection />
 
         {/* ABAS DE CONFIGURAÇÃO DO PROJETO ATIVO */}
         <div className="border-b border-ink-700 flex flex-wrap gap-1 sticky top-0 bg-ink-950 z-10">
@@ -667,112 +664,78 @@ export default function SettingsPage() {
   );
 }
 
-function EnvironmentsSection() {
+function AppEnvironments({ repositoryId, baseBranch }: { repositoryId: string; baseBranch?: string }) {
   const [envs, setEnvs] = useState<any[]>([]);
-  const [apps, setApps] = useState<any[]>([]);
   const [name, setName] = useState("");
+  const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(true);
 
   async function load() {
-    const res = await fetch("/api/environments");
+    const res = await fetch(`/api/environments?repository_id=${repositoryId}`);
     const data = await res.json();
     setEnvs(data.environments ?? []);
-    setApps(data.applications ?? []);
     setLoading(false);
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [repositoryId]);
 
   async function add() {
     if (!name.trim()) return;
     await fetch("/api/environments", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ repository_id: repositoryId, name, branch: branch || baseBranch || "main" }),
     });
-    setName(""); load();
+    setName(""); setBranch(""); load();
   }
   async function remove(id: string) {
     await fetch(`/api/environments/${id}`, { method: "DELETE" });
     load();
   }
-  async function setBranch(envId: string, repoId: string, branch: string) {
-    await fetch(`/api/environments/${envId}`, {
+  async function saveBranch(id: string, b: string) {
+    await fetch(`/api/environments/${id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repository_id: repoId, branch }),
+      body: JSON.stringify({ branch: b }),
     });
-    setEnvs((prev) =>
-      prev.map((e) =>
-        e.id !== envId
-          ? e
-          : {
-              ...e,
-              branches: [
-                ...(e.branches ?? []).filter((b: any) => b.repository_id !== repoId),
-                { environment_id: envId, repository_id: repoId, branch },
-              ],
-            }
-      )
-    );
   }
 
-  const branchOf = (env: any, repoId: string) =>
-    (env.branches ?? []).find((b: any) => b.repository_id === repoId)?.branch ?? "";
-
   return (
-    <section>
-      <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">// ambientes</h2>
-      <div className="text-xs text-ink-400 mb-4 leading-relaxed">
-        Cada ambiente mapeia <strong>uma branch por aplicação</strong> (ex.: Dev →{" "}
-        <span className="font-mono">dev</span>, Homologação →{" "}
-        <span className="font-mono">homolog</span>, Produção →{" "}
-        <span className="font-mono">main</span>). Ao criar um card você escolhe a
-        aplicação e o ambiente; ao concluir, dá pra elevar de um ambiente para o outro.
+    <div className="mt-3 pl-3 border-l border-ink-800">
+      <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-2">
+        ambientes (branches) desta aplicação
       </div>
-
       {loading ? (
-        <div className="text-xs text-ink-400">carregando…</div>
+        <div className="text-[11px] text-ink-500">carregando…</div>
       ) : (
-        <>
-          {apps.length === 0 && (
-            <div className="text-[11px] text-planning border border-planning/40 bg-planning/5 p-2 mb-3">
-              cadastre as aplicações do time primeiro (na seção do time, acima).
+        <div className="space-y-1 mb-2">
+          {envs.map((e) => (
+            <div key={e.id} className="flex items-center gap-2 text-sm">
+              <span className="text-ink-200 w-40 truncate">{e.name}</span>
+              <span className="text-ink-500 text-xs">→</span>
+              <input
+                defaultValue={e.branch}
+                onBlur={(ev) => saveBranch(e.id, ev.target.value)}
+                className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono text-ink-100 focus:border-discovery focus:outline-none"
+              />
+              {e.is_default && (
+                <span className="text-[9px] uppercase text-qa border border-qa/40 px-1 py-0.5">default</span>
+              )}
+              <button onClick={() => remove(e.id)} className="text-qa hover:underline text-[11px]">remover</button>
             </div>
+          ))}
+          {envs.length === 0 && (
+            <div className="text-[11px] text-ink-500 italic">nenhum ambiente — adicione abaixo (ex.: Dev → develop)</div>
           )}
-          <div className="space-y-3 mb-4">
-            {envs.map((env) => (
-              <div key={env.id} className="border border-ink-700 bg-ink-900/40 p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-sm font-semibold text-ink-100">{env.name}</span>
-                  {env.is_default && (
-                    <span className="text-[9px] uppercase text-qa border border-qa/40 px-1 py-0.5">default</span>
-                  )}
-                  <button onClick={() => remove(env.id)} className="ml-auto text-qa hover:underline text-xs">remover</button>
-                </div>
-                <div className="space-y-1">
-                  {apps.map((a) => (
-                    <div key={a.id} className="flex items-center gap-2 text-sm">
-                      <span className="text-ink-300 w-48 truncate">{a.label ?? a.github_repo}</span>
-                      <span className="text-ink-500 text-xs">branch:</span>
-                      <input
-                        defaultValue={branchOf(env, a.id)}
-                        onBlur={(e) => setBranch(env.id, a.id, e.target.value)}
-                        placeholder="main"
-                        className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono text-ink-100 focus:border-discovery focus:outline-none"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <input value={name} onChange={(e) => setName(e.target.value)}
-              placeholder="novo ambiente (ex: Homologação)"
-              className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
-            <button onClick={add} className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300">+ ambiente</button>
-          </div>
-        </>
+        </div>
       )}
-    </section>
+      <div className="flex gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)}
+          placeholder="ambiente (ex: Homologação)"
+          className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1 text-xs focus:border-discovery focus:outline-none" />
+        <input value={branch} onChange={(e) => setBranch(e.target.value)}
+          placeholder={`branch (ex: ${baseBranch || "main"})`}
+          className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono focus:border-discovery focus:outline-none" />
+        <button onClick={add} className="bg-ink-100 text-ink-950 px-2 py-1 text-xs font-semibold hover:bg-ink-300">+ ambiente</button>
+      </div>
+    </div>
   );
 }
 
@@ -1397,27 +1360,32 @@ function ReposManager() {
           {repos.map((r) => (
             <div
               key={r.id}
-              className="flex items-center justify-between border border-ink-700 bg-ink-900/40 p-2"
+              className="border border-ink-700 bg-ink-900/40 p-3"
             >
-              <div>
-                <span className="text-sm text-ink-100 font-mono">
-                  {r.github_repo}
-                </span>
-                {r.label && r.label !== r.github_repo && (
-                  <span className="text-[11px] text-ink-400 ml-2">
-                    {r.label}
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm text-ink-100 font-mono">
+                    {r.github_repo}
                   </span>
-                )}
-                <span className="text-[10px] text-ink-400 ml-2">
-                  base: {r.default_base_branch}
-                </span>
+                  {r.label && r.label !== r.github_repo && (
+                    <span className="text-[11px] text-ink-400 ml-2">
+                      {r.label}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-ink-400 ml-2">
+                    base: {r.default_base_branch}
+                    {r.app_type === "existing" ? " · existente" : " · nova"}
+                    {r.tech_stack ? ` · ${r.tech_stack}` : ""}
+                  </span>
+                </div>
+                <button
+                  onClick={() => removeRepo(r.id)}
+                  className="text-xs text-qa hover:underline px-2"
+                >
+                  remover
+                </button>
               </div>
-              <button
-                onClick={() => removeRepo(r.id)}
-                className="text-xs text-qa hover:underline px-2"
-              >
-                remover
-              </button>
+              <AppEnvironments repositoryId={r.id} baseBranch={r.default_base_branch} />
             </div>
           ))}
         </div>

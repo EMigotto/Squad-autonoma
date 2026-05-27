@@ -84,21 +84,11 @@ async function getProjectContextBlock(
   if (environmentId) {
     const { data: env } = await sb
       .from("environments")
-      .select("name")
+      .select("name, branch")
       .eq("id", environmentId)
       .maybeSingle();
-    let branch: string | null = null;
-    if (repositoryId) {
-      const { data: eb } = await sb
-        .from("environment_branches")
-        .select("branch")
-        .eq("environment_id", environmentId)
-        .eq("repository_id", repositoryId)
-        .maybeSingle();
-      branch = eb?.branch ?? null;
-    }
     if (env)
-      envLine = `Ambiente alvo: ${env.name}${branch ? ` (branch base: ${branch})` : ""}\n`;
+      envLine = `Ambiente alvo: ${env.name}${env.branch ? ` (branch base: ${env.branch})` : ""}\n`;
   }
 
   const { data: knowledge } = await sb
