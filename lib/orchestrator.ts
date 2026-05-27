@@ -1,4 +1,5 @@
 import { notifyStageCompleted } from "@/lib/notify";
+import { captureSessionUsage } from "@/lib/metrics";
 /**
  * Orquestrador: um card por feature percorrendo as raias.
  * Agents carregados de agent_definitions (DB).
@@ -144,6 +145,11 @@ async function getProjectContextBlock(
   if (project.tech_stack) block += `Tech stack: ${project.tech_stack}\n`;
   const instr = project.instructions_path || "CLAUDE.md";
   block += `Instructions file: ${instr}\n`;
+  block +=
+    `Documentation language: ALL artifacts you create (PRD, ADR, acceptance ` +
+    `criteria, QA report, README sections, any .md files) MUST be written in ` +
+    `English. The UI provides on-demand Portuguese translation; do not write ` +
+    `in Portuguese.\n`;
 
   if (isExisting) {
     block +=
@@ -1215,6 +1221,16 @@ export async function forceSyncSession(cardId: string): Promise<{
       session_status: rawStatus,
       action: "card já não estava em running — nenhuma ação necessária",
     };
+  }
+
+  // Captura uso/custo da sessão encerrada (best-effort)
+  try {
+    const usage = (session as any)?.usage ?? null;
+    if (usage) {
+      await captureSessionUsage(cardId, card.claude_session_id, usage);
+    }
+  } catch (e) {
+    console.error("[forceSync] captureSessionUsage falhou", e);
   }
 
   // É uma sessão de chunk? Avança o pipeline de development

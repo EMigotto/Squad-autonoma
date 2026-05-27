@@ -172,3 +172,142 @@ export async function updateManualMetrics(
   );
   await recomputeCardMetrics(cardId);
 }
+
+// ============================================================
+// captureSessionUsage: persiste tokens + custos por etapa
+// ============================================================
+// Chamado quando uma sessão completa. Lê usage do objeto session da Anthropic
+// (best-effort — se o campo não existir, fica 0) e grava no card_stage_run.
+export async function captureSessionUsage(
+  cardId: string,
+  sessionId: string,
+  sessionUsage: { input_tokens?: number; output_tokens?: number } | null | undefined
+): Promise<void> {
+  if (!sessionUsage) return;
+  const inTok = Number(sessionUsage.input_tokens ?? 0);
+  const outTok = Number(sessionUsage.output_tokens ?? 0);
+  if (inTok === 0 && outTok === 0) return;
+
+  const sb = createServiceClient();
+  // localiza o stage_run pela session_id (último daquele card)
+  const { data: run } = await sb
+    .from("card_stage_runs")
+    .select("id, card_id, input_tokens, output_tokens, started_at, ended_at, feature:cards!inner(feature:features(project_id))")
+    .eq("card_id", cardId)
+    .eq("claude_session_id", sessionId)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!run) return;
+
+  // rates do projeto
+  const projectId = (run as any)?.feature?.feature?.project_id;
+  let inMtok = 0, outMtok = 0, hourly = 0;
+  if (projectId) {
+    const { data: s } = await sb
+      .from("app_settings")
+      .select("token_cost_input_mtok, token_cost_output_mtok, human_hourly_cost")
+      .eq("project_id", projectId)
+      .limit(1)
+      .maybeSingle();
+    inMtok = Number(s?.token_cost_input_mtok ?? 0);
+    outMtok = Number(s?.token_cost_output_mtok ?? 0);
+    hourly = Number(s?.human_hourly_cost ?? 0);
+  }
+
+  // tokens são cumulativos no objeto session — só atualiza se vier maior
+  const newIn = Math.max(inTok, Number((run as any).input_tokens ?? 0));
+  const newOut = Math.max(outTok, Number((run as any).output_tokens ?? 0));
+  const tokenCost = (newIn / 1_000_000) * inMtok + (newOut / 1_000_000) * outMtok;
+
+  // duração da etapa em horas (proxy para custo humano — tempo do revisor)
+  const started = new Date((run as any).started_at);
+  const ended = (run as any).ended_at ? new Date((run as any).ended_at) : new Date();
+  const hours = Math.max(0, (ended.getTime() - started.getTime()) / 3_600_000);
+  const humanCost = hours * hourly;
+
+  await sb
+    .from("card_stage_runs")
+    .update({
+      input_tokens: newIn,
+      output_tokens: newOut,
+      token_cost: +tokenCost.toFixed(4),
+      human_hours: +hours.toFixed(3),
+      human_cost: +humanCost.toFixed(2),
+      total_cost: +(tokenCost + humanCost).toFixed(2),
+    })
+    .eq("id", (run as any).id);
+
+  // rolla pro card_metrics
+  await recomputeCardMetrics(cardId);
+}
+
+// ============================================================
+// getStageCostBreakdown: para a UI do detalhe — custo por etapa + acumulado
+// ============================================================
+export async function getStageCostBreakdown(cardId: string): Promise<{
+  stages: Array<{
+    id: string;
+    stage: string;
+    agent_role: string | null;
+    started_at: string;
+    ended_at: string | null;
+    status: string;
+    input_tokens: number;
+    output_tokens: number;
+    token_cost: number;
+    human_hours: number;
+    human_cost: number;
+    total_cost: number;
+    running_total: number;
+  }>;
+  currency: string;
+}> {
+  const sb = createServiceClient();
+  const { data: runs } = await sb
+    .from("card_stage_runs")
+    .select(
+      "id, stage, agent_role, started_at, ended_at, status, input_tokens, output_tokens, token_cost, human_hours, human_cost, total_cost"
+    )
+    .eq("card_id", cardId)
+    .order("started_at", { ascending: true });
+
+  // moeda do projeto
+  const { data: card } = await sb
+    .from("cards")
+    .select("feature:features(project_id)")
+    .eq("id", cardId)
+    .single();
+  const projectId = (card as any)?.feature?.project_id;
+  let currency = "BRL";
+  if (projectId) {
+    const { data: s } = await sb
+      .from("app_settings")
+      .select("metrics_currency")
+      .eq("project_id", projectId)
+      .limit(1)
+      .maybeSingle();
+    currency = s?.metrics_currency ?? "BRL";
+  }
+
+  let acc = 0;
+  const stages = (runs ?? []).map((r: any) => {
+    acc += Number(r.total_cost ?? 0);
+    return {
+      id: r.id,
+      stage: r.stage,
+      agent_role: r.agent_role,
+      started_at: r.started_at,
+      ended_at: r.ended_at,
+      status: r.status,
+      input_tokens: Number(r.input_tokens ?? 0),
+      output_tokens: Number(r.output_tokens ?? 0),
+      token_cost: Number(r.token_cost ?? 0),
+      human_hours: Number(r.human_hours ?? 0),
+      human_cost: Number(r.human_cost ?? 0),
+      total_cost: Number(r.total_cost ?? 0),
+      running_total: +acc.toFixed(2),
+    };
+  });
+  return { stages, currency };
+}

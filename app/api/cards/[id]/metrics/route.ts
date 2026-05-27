@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { recomputeCardMetrics, updateManualMetrics } from "@/lib/metrics";
+import { recomputeCardMetrics, updateManualMetrics, getStageCostBreakdown } from "@/lib/metrics";
 
 export const runtime = "nodejs";
 
@@ -41,7 +41,19 @@ export async function GET(
     currency = s?.metrics_currency ?? "BRL";
   }
 
-  return NextResponse.json({ metrics: data, currency });
+  // breakdown por etapa (custo incremental + acumulado)
+  let stageBreakdown: any = { stages: [], currency };
+  try {
+    stageBreakdown = await getStageCostBreakdown(params.id);
+  } catch {
+    /* best-effort */
+  }
+
+  return NextResponse.json({
+    metrics: data,
+    currency,
+    stage_breakdown: stageBreakdown.stages,
+  });
 }
 
 export async function PATCH(

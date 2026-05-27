@@ -90,9 +90,12 @@ export default function CardDetailPanel({
     content?: string;
     loading: boolean;
     html_url?: string;
+    branch?: string;
+    sha?: string;
   } | null>(null);
   const [metrics, setMetrics] = useState<any>(null);
   const [currency, setCurrency] = useState("BRL");
+  const [stageBreakdown, setStageBreakdown] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<"details" | "chat">("details");
 
   async function loadMetrics() {
@@ -101,6 +104,7 @@ export default function CardDetailPanel({
       const data = await res.json();
       setMetrics(data.metrics);
       setCurrency(data.currency ?? "BRL");
+      setStageBreakdown(data.stage_breakdown ?? []);
     } catch {
       /* ignore */
     }
@@ -203,14 +207,16 @@ export default function CardDetailPanel({
   }
 
   async function openFile(file: ArtifactFile) {
+    const branch = file.branch ?? artifacts.branch ?? "main";
     setOpenArtifact({
       path: file.path,
       name: file.name,
       loading: true,
+      branch,
     });
     const url = `/api/cards/${cardId}/artifacts/file?path=${encodeURIComponent(
       file.path
-    )}&branch=${encodeURIComponent(file.branch ?? artifacts.branch ?? "main")}`;
+    )}&branch=${encodeURIComponent(branch)}`;
     const res = await fetch(url);
     const data = await res.json();
     setOpenArtifact({
@@ -219,6 +225,8 @@ export default function CardDetailPanel({
       loading: false,
       content: data.content,
       html_url: data.html_url,
+      branch,
+      sha: data.sha,
     });
   }
 
@@ -490,6 +498,9 @@ export default function CardDetailPanel({
             {/* Indicadores do card */}
             <MetricsPanel metrics={metrics} currency={currency} onSave={saveMetric} />
 
+            {/* Custo por etapa (incremental) */}
+            <StageCostBreakdown stages={stageBreakdown} currency={currency} />
+
             {/* Etapas com sessões e artefatos linkados */}
             <StagesView
               stageRuns={stageRuns ?? []}
@@ -732,6 +743,7 @@ export default function CardDetailPanel({
       {openArtifact && (
         <ArtifactViewer
           artifact={openArtifact}
+          cardId={cardId}
           onClose={() => setOpenArtifact(null)}
         />
       )}
@@ -791,7 +803,9 @@ export default function CardDetailPanel({
 
 function ArtifactViewer({
   artifact,
+  cardId,
   onClose,
+  onSaved,
 }: {
   artifact: {
     path: string;
@@ -799,16 +813,114 @@ function ArtifactViewer({
     content?: string;
     loading: boolean;
     html_url?: string;
+    branch?: string;
+    sha?: string;
   };
+  cardId: string;
   onClose: () => void;
+  onSaved?: () => void;
 }) {
   const isHtml = artifact.name.toLowerCase().endsWith(".html");
   const isMarkdown =
     artifact.name.toLowerCase().endsWith(".md") ||
     artifact.name.toLowerCase().endsWith(".markdown");
+  const isText = isMarkdown || /\.(txt|json|ya?ml|toml|csv)$/i.test(artifact.name);
+  const editable = isText; // só edição de texto por enquanto
+
   const [renderMode, setRenderMode] = useState<"source" | "preview">(
     isHtml ? "preview" : "source"
   );
+  const [lang, setLang] = useState<"en" | "pt">("en"); // EN é o canônico
+  const [translating, setTranslating] = useState(false);
+  const [ptContent, setPtContent] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>("");
+  const [sha, setSha] = useState<string | undefined>(artifact.sha);
+
+  // conteúdo mostrado conforme idioma escolhido
+  const enContent = artifact.content ?? "";
+  const displayContent = lang === "pt" ? ptContent ?? "" : enContent;
+
+  async function ensurePtTranslation() {
+    if (ptContent || !enContent) return;
+    setTranslating(true);
+    try {
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: enContent, target: "pt" }),
+      });
+      const data = await res.json();
+      if (res.ok) setPtContent(data.translated);
+      else setError(data.error ?? `HTTP ${res.status}`);
+    } finally {
+      setTranslating(false);
+    }
+  }
+
+  async function toggleLang() {
+    if (editing) return; // não troca idioma com edição aberta
+    if (lang === "en") {
+      await ensurePtTranslation();
+      setLang("pt");
+    } else {
+      setLang("en");
+    }
+  }
+
+  function startEdit() {
+    setError("");
+    setDraft(displayContent);
+    setEditing(true);
+  }
+
+  async function saveEdit() {
+    setSaving(true);
+    setError("");
+    try {
+      // canônico em inglês: se editou em PT, traduz pra EN antes de gravar
+      let toWrite = draft;
+      if (lang === "pt") {
+        const res = await fetch("/api/translate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: draft, target: "en" }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? `translate HTTP ${res.status}`);
+        toWrite = data.translated;
+      }
+
+      const putRes = await fetch(`/api/cards/${cardId}/artifacts/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: artifact.path,
+          branch: artifact.branch ?? "main",
+          sha,
+          content: toWrite,
+          message: `docs: edit ${artifact.path} via squad UI`,
+        }),
+      });
+      const putData = await putRes.json();
+      if (!putRes.ok) throw new Error(putData.error ?? `HTTP ${putRes.status}`);
+
+      // atualiza state local: novo SHA, conteúdo EN atual, e refaz PT se estava em PT
+      setSha(putData.sha);
+      // reflete o que foi salvo
+      (artifact as any).content = toWrite;
+      if (lang === "pt") setPtContent(draft);
+      else setPtContent(null); // invalida PT cache
+      setEditing(false);
+      onSaved?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div
@@ -819,17 +931,28 @@ function ArtifactViewer({
         className="bg-ink-950 border border-ink-700 w-full max-w-5xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="border-b border-ink-700 p-4 flex items-center justify-between shrink-0">
+        <div className="border-b border-ink-700 p-4 flex items-center justify-between shrink-0 gap-3">
           <div className="min-w-0">
             <div className="text-xs uppercase tracking-widest text-ink-400">
               // {artifact.path}
+              {artifact.branch && (
+                <span className="text-ink-500 ml-2 font-mono">@{artifact.branch}</span>
+              )}
             </div>
-            <div className="text-base font-semibold truncate">
-              {artifact.name}
-            </div>
+            <div className="text-base font-semibold truncate">{artifact.name}</div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {(isHtml || isMarkdown) && (
+            {editable && !editing && (
+              <button
+                onClick={toggleLang}
+                disabled={translating || editing}
+                className="text-xs border border-ink-700 px-2 py-1 hover:bg-ink-800 disabled:opacity-50"
+                title="ver em outro idioma (canônico é inglês)"
+              >
+                {translating ? "traduzindo…" : lang === "en" ? "EN · ver PT" : "PT · ver EN"}
+              </button>
+            )}
+            {(isHtml || isMarkdown) && !editing && (
               <button
                 onClick={() =>
                   setRenderMode(renderMode === "source" ? "preview" : "source")
@@ -839,7 +962,34 @@ function ArtifactViewer({
                 {renderMode === "source" ? "preview" : "source"}
               </button>
             )}
-            {artifact.html_url && (
+            {editable && !editing && (
+              <button
+                onClick={startEdit}
+                disabled={artifact.loading || !sha}
+                className="text-xs bg-discovery text-ink-950 px-3 py-1 font-semibold hover:bg-discovery/80 disabled:opacity-50"
+              >
+                editar
+              </button>
+            )}
+            {editing && (
+              <>
+                <button
+                  onClick={saveEdit}
+                  disabled={saving}
+                  className="text-xs bg-qa text-ink-950 px-3 py-1 font-semibold hover:bg-qa/80 disabled:opacity-50"
+                >
+                  {saving ? "salvando…" : "salvar"}
+                </button>
+                <button
+                  onClick={() => { setEditing(false); setError(""); }}
+                  disabled={saving}
+                  className="text-xs border border-ink-700 px-2 py-1 hover:bg-ink-800"
+                >
+                  cancelar
+                </button>
+              </>
+            )}
+            {artifact.html_url && !editing && (
               <a
                 href={artifact.html_url}
                 target="_blank"
@@ -858,27 +1008,45 @@ function ArtifactViewer({
           </div>
         </div>
 
+        {error && (
+          <div className="px-4 py-2 border-b border-qa/40 bg-qa/10 text-xs text-qa">
+            {error}
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto">
           {artifact.loading && (
-            <div className="p-8 text-center text-sm text-ink-300">
-              carregando...
+            <div className="p-8 text-center text-sm text-ink-300">carregando...</div>
+          )}
+
+          {!artifact.loading && editing && (
+            <div className="p-4 space-y-2">
+              <div className="text-[10px] uppercase tracking-widest text-ink-400">
+                editando em {lang === "pt" ? "PT (será salvo em EN)" : "EN (canônico)"}
+              </div>
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                spellCheck={false}
+                className="w-full h-[70vh] bg-ink-900 border border-ink-700 p-3 text-xs font-mono text-ink-100 leading-relaxed focus:border-discovery focus:outline-none resize-none"
+              />
             </div>
           )}
 
-          {!artifact.loading && artifact.content && (
+          {!artifact.loading && !editing && displayContent && (
             <>
               {isHtml && renderMode === "preview" ? (
                 <iframe
-                  srcDoc={artifact.content}
+                  srcDoc={displayContent}
                   sandbox="allow-scripts"
                   className="w-full h-[80vh] border-0 bg-white"
                   title={artifact.name}
                 />
               ) : isMarkdown && renderMode === "preview" ? (
-                <MarkdownPreview content={artifact.content} />
+                <MarkdownPreview content={displayContent} />
               ) : (
                 <pre className="p-4 text-xs text-ink-100 whitespace-pre-wrap font-mono leading-relaxed">
-                  {artifact.content}
+                  {displayContent}
                 </pre>
               )}
             </>
@@ -1065,6 +1233,91 @@ function MetricsPanel({
         )}
       </div>
     </Section>
+  );
+}
+
+function StageCostBreakdown({ stages, currency }: { stages: any[]; currency: string }) {
+  if (!stages || stages.length === 0) return null;
+  const fmt = (n: number) =>
+    new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: currency || "BRL",
+    }).format(Number(n || 0));
+  const STAGE_LABEL: Record<string, string> = {
+    discovery: "Discovery",
+    planning: "Planejamento",
+    development: "Desenvolvimento",
+    qa: "Qualidade (QA)",
+    done: "Concluído",
+  };
+  const total = stages.length ? stages[stages.length - 1].running_total : 0;
+  return (
+    <section className="border border-ink-700 bg-ink-900/40 p-4">
+      <div className="flex items-baseline justify-between mb-3">
+        <h3 className="text-xs uppercase tracking-widest text-ink-400">
+          // custo por etapa
+        </h3>
+        <div className="text-[11px] text-ink-400">
+          total acumulado:{" "}
+          <span className="text-ink-100 font-mono">{fmt(total)}</span>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="text-[10px] uppercase tracking-widest text-ink-500">
+            <tr>
+              <th className="text-left py-1 pr-3">etapa</th>
+              <th className="text-right py-1 px-2">tokens in</th>
+              <th className="text-right py-1 px-2">tokens out</th>
+              <th className="text-right py-1 px-2">custo tokens</th>
+              <th className="text-right py-1 px-2">horas</th>
+              <th className="text-right py-1 px-2">custo humano</th>
+              <th className="text-right py-1 px-2">total etapa</th>
+              <th className="text-right py-1 pl-2">acumulado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stages.map((s) => (
+              <tr key={s.id} className="border-t border-ink-800">
+                <td className="py-1 pr-3">
+                  <div className="text-ink-200">{STAGE_LABEL[s.stage] ?? s.stage}</div>
+                  {s.agent_role && (
+                    <div className="text-[10px] text-ink-500">{s.agent_role}</div>
+                  )}
+                </td>
+                <td className="text-right py-1 px-2 font-mono text-ink-300">
+                  {s.input_tokens.toLocaleString("pt-BR")}
+                </td>
+                <td className="text-right py-1 px-2 font-mono text-ink-300">
+                  {s.output_tokens.toLocaleString("pt-BR")}
+                </td>
+                <td className="text-right py-1 px-2 font-mono text-ink-200">
+                  {fmt(s.token_cost)}
+                </td>
+                <td className="text-right py-1 px-2 font-mono text-ink-300">
+                  {s.human_hours.toFixed(2)}
+                </td>
+                <td className="text-right py-1 px-2 font-mono text-ink-200">
+                  {fmt(s.human_cost)}
+                </td>
+                <td className="text-right py-1 px-2 font-mono text-ink-100 font-semibold">
+                  {fmt(s.total_cost)}
+                </td>
+                <td className="text-right py-1 pl-2 font-mono text-development">
+                  {fmt(s.running_total)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-[10px] text-ink-500 mt-2 leading-relaxed">
+        Custo de tokens calculado pelas taxas configuradas em Settings → indicadores
+        & custos. Horas humanas usam a duração da etapa multiplicada pelo custo/hora
+        do time. A captura de tokens ocorre ao término de cada execução (best-effort
+        pela API da Anthropic).
+      </div>
+    </section>
   );
 }
 
