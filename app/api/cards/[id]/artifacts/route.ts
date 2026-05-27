@@ -27,7 +27,7 @@ export async function GET(
     const svc = createServiceClient();
     const { data: card } = await svc
       .from("cards")
-      .select("feature:features(slug, github_repo)")
+      .select("feature:features(slug, github_repo, environment_id)")
       .eq("id", params.id)
       .single();
 
@@ -45,7 +45,18 @@ export async function GET(
       );
     }
 
-    const branches = await tryBranches(repo, slug, token);
+    // Branch do ambiente do card (onde tudo é commitado no novo workflow)
+    let envBranch: string | null = null;
+    if (feature.environment_id) {
+      const { data: env } = await svc
+        .from("environments")
+        .select("branch")
+        .eq("id", feature.environment_id)
+        .maybeSingle();
+      envBranch = env?.branch ?? null;
+    }
+
+    const branches = await tryBranches(repo, slug, token, envBranch);
 
     // Coleta arquivos de TODOS os branches encontrados (spec, plan, etc),
     // deduplicando por path. Isso garante que o adr.md (gerado pelo Tech Lead
@@ -165,16 +176,25 @@ async function listPulls(repo: string, slug: string, token: string) {
   }
 }
 
-async function tryBranches(repo: string, slug: string, token: string) {
+async function tryBranches(
+  repo: string,
+  slug: string,
+  token: string,
+  envBranch?: string | null
+) {
   const candidates = [
+    ...(envBranch ? [envBranch] : []),
     `feat/${slug}/spec`,
     `feat/${slug}/plan`,
     `feat/${slug}/integration`,
     "main",
     "master",
   ];
+  // dedup preservando ordem
+  const seen = new Set<string>();
+  const unique = candidates.filter((b) => (seen.has(b) ? false : (seen.add(b), true)));
   const ok: string[] = [];
-  for (const br of candidates) {
+  for (const br of unique) {
     const url = `https://api.github.com/repos/${repo}/contents/docs/features/${encodeURIComponent(
       slug
     )}?ref=${encodeURIComponent(br)}`;
