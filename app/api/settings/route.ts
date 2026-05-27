@@ -58,6 +58,7 @@ export async function PUT(req: Request) {
     "auto_advance_after_tl",
     "default_base_branch",
     "notification_slack_webhook",
+    "notification_teams_webhook",
     "human_hourly_cost",
     "token_cost_input_mtok",
     "token_cost_output_mtok",

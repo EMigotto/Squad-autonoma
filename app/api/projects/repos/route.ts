@@ -54,6 +54,10 @@ export async function POST(req: Request) {
       default_base_branch: body.default_base_branch || "main",
       description: body.description || null,
       depends_on: body.depends_on || null,
+      app_type: body.app_type === "existing" ? "existing" : "new",
+      app_kind: body.app_kind || null,
+      tech_stack: body.tech_stack || null,
+      instructions_path: body.instructions_path || "CLAUDE.md",
     })
     .select()
     .single();

@@ -11,6 +11,7 @@ interface Settings {
   auto_advance_after_tl: boolean;
   default_base_branch: string;
   notification_slack_webhook: string | null;
+  notification_teams_webhook?: string | null;
   human_hourly_cost?: number;
   token_cost_input_mtok?: number;
   token_cost_output_mtok?: number;
@@ -219,6 +220,9 @@ export default function SettingsPage() {
 
         {/* PROJETOS */}
         <ProjectsSection />
+
+        {/* AMBIENTES */}
+        <EnvironmentsSection />
 
         {/* ABAS DE CONFIGURAÇÃO DO PROJETO ATIVO */}
         <div className="border-b border-ink-700 flex flex-wrap gap-1 sticky top-0 bg-ink-950 z-10">
@@ -564,12 +568,26 @@ export default function SettingsPage() {
           <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">
             // notificações
           </h2>
+          <div className="text-xs text-ink-400 mb-3 leading-relaxed">
+            A cada etapa concluída na esteira (ex.: Discovery finalizado), o time é
+            avisado. Cole a URL do fluxo <strong>Workflows</strong> do Teams
+            (canal do time → ⋯ → Workflows → “Post to a channel when a webhook
+            request is received”).
+          </div>
           <SimpleField
-            label="slack webhook url (opcional)"
-            value={settings.notification_slack_webhook ?? ""}
-            onChange={(v) => update("notification_slack_webhook", v || null)}
-            placeholder="https://hooks.slack.com/services/..."
+            label="microsoft teams — webhook (workflows)"
+            value={settings.notification_teams_webhook ?? ""}
+            onChange={(v) => update("notification_teams_webhook", v || null)}
+            placeholder="https://prod-XX.westus.logic.azure.com:443/workflows/..."
           />
+          <div className="mt-3">
+            <SimpleField
+              label="slack webhook url (opcional / legado)"
+              value={settings.notification_slack_webhook ?? ""}
+              onChange={(v) => update("notification_slack_webhook", v || null)}
+              placeholder="https://hooks.slack.com/services/..."
+            />
+          </div>
         </section>
         </>
         )}
@@ -600,6 +618,115 @@ export default function SettingsPage() {
         />
       )}
     </main>
+  );
+}
+
+function EnvironmentsSection() {
+  const [envs, setEnvs] = useState<any[]>([]);
+  const [apps, setApps] = useState<any[]>([]);
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    const res = await fetch("/api/environments");
+    const data = await res.json();
+    setEnvs(data.environments ?? []);
+    setApps(data.applications ?? []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function add() {
+    if (!name.trim()) return;
+    await fetch("/api/environments", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    setName(""); load();
+  }
+  async function remove(id: string) {
+    await fetch(`/api/environments/${id}`, { method: "DELETE" });
+    load();
+  }
+  async function setBranch(envId: string, repoId: string, branch: string) {
+    await fetch(`/api/environments/${envId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repository_id: repoId, branch }),
+    });
+    setEnvs((prev) =>
+      prev.map((e) =>
+        e.id !== envId
+          ? e
+          : {
+              ...e,
+              branches: [
+                ...(e.branches ?? []).filter((b: any) => b.repository_id !== repoId),
+                { environment_id: envId, repository_id: repoId, branch },
+              ],
+            }
+      )
+    );
+  }
+
+  const branchOf = (env: any, repoId: string) =>
+    (env.branches ?? []).find((b: any) => b.repository_id === repoId)?.branch ?? "";
+
+  return (
+    <section>
+      <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">// ambientes</h2>
+      <div className="text-xs text-ink-400 mb-4 leading-relaxed">
+        Cada ambiente mapeia <strong>uma branch por aplicação</strong> (ex.: Dev →{" "}
+        <span className="font-mono">dev</span>, Homologação →{" "}
+        <span className="font-mono">homolog</span>, Produção →{" "}
+        <span className="font-mono">main</span>). Ao criar um card você escolhe a
+        aplicação e o ambiente; ao concluir, dá pra elevar de um ambiente para o outro.
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-ink-400">carregando…</div>
+      ) : (
+        <>
+          {apps.length === 0 && (
+            <div className="text-[11px] text-planning border border-planning/40 bg-planning/5 p-2 mb-3">
+              cadastre as aplicações do time primeiro (na seção do time, acima).
+            </div>
+          )}
+          <div className="space-y-3 mb-4">
+            {envs.map((env) => (
+              <div key={env.id} className="border border-ink-700 bg-ink-900/40 p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-sm font-semibold text-ink-100">{env.name}</span>
+                  {env.is_default && (
+                    <span className="text-[9px] uppercase text-qa border border-qa/40 px-1 py-0.5">default</span>
+                  )}
+                  <button onClick={() => remove(env.id)} className="ml-auto text-qa hover:underline text-xs">remover</button>
+                </div>
+                <div className="space-y-1">
+                  {apps.map((a) => (
+                    <div key={a.id} className="flex items-center gap-2 text-sm">
+                      <span className="text-ink-300 w-48 truncate">{a.label ?? a.github_repo}</span>
+                      <span className="text-ink-500 text-xs">branch:</span>
+                      <input
+                        defaultValue={branchOf(env, a.id)}
+                        onBlur={(e) => setBranch(env.id, a.id, e.target.value)}
+                        placeholder="main"
+                        className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono text-ink-100 focus:border-discovery focus:outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input value={name} onChange={(e) => setName(e.target.value)}
+              placeholder="novo ambiente (ex: Homologação)"
+              className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
+            <button onClick={add} className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300">+ ambiente</button>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -1149,6 +1276,9 @@ function ReposManager() {
   const [newLabel, setNewLabel] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newDeps, setNewDeps] = useState("");
+  const [newAppType, setNewAppType] = useState("new");
+  const [newStack, setNewStack] = useState("");
+  const [newInstr, setNewInstr] = useState("CLAUDE.md");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
 
@@ -1174,6 +1304,9 @@ function ReposManager() {
         label: newLabel.trim(),
         description: newDesc.trim(),
         depends_on: newDeps.trim(),
+        app_type: newAppType,
+        tech_stack: newStack.trim(),
+        instructions_path: newInstr.trim() || "CLAUDE.md",
       }),
     });
     const data = await res.json();
@@ -1297,17 +1430,55 @@ function ReposManager() {
             className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
           />
         </div>
+        <div className="min-w-[130px]">
+          <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+            tipo
+          </label>
+          <select
+            value={newAppType}
+            onChange={(e) => setNewAppType(e.target.value)}
+            className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+          >
+            <option value="new">Nova</option>
+            <option value="existing">Existente</option>
+          </select>
+        </div>
+        <div className="flex-1 min-w-[150px]">
+          <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+            stack
+          </label>
+          <input
+            type="text"
+            value={newStack}
+            onChange={(e) => setNewStack(e.target.value)}
+            placeholder="ex: Java Spring, Postgres"
+            className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+          />
+        </div>
+        <div className="min-w-[130px]">
+          <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+            instruções
+          </label>
+          <input
+            type="text"
+            value={newInstr}
+            onChange={(e) => setNewInstr(e.target.value)}
+            placeholder="CLAUDE.md"
+            className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+          />
+        </div>
         <button
           onClick={addRepo}
           disabled={adding || !newRepo.trim()}
           className="bg-development text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-development/80 disabled:opacity-50"
         >
-          {adding ? "..." : "+ adicionar repo"}
+          {adding ? "..." : "+ adicionar aplicação"}
         </button>
       </div>
       <div className="text-[10px] text-ink-400 mt-2">
-        “depende de” declara a ordem entre repositórios — os agentes implementam
-        os repos dependidos primeiro e mantêm os contratos compatíveis.
+        cada aplicação carrega sua própria config (tipo nova/existente, stack,
+        arquivo de instruções) e suas dependências. “depende de” declara a ordem
+        entre aplicações — os agentes implementam as dependidas primeiro.
       </div>
       {error && <div className="text-xs text-qa font-mono mt-2">{error}</div>}
     </div>

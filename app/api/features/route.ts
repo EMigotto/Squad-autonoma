@@ -103,6 +103,7 @@ export async function POST(req: Request) {
         github_parent_issue: body.github_parent_issue ?? 0,
         project_id: projectId,
         repository_id: repositoryId,
+        environment_id: body.environment_id ?? undefined,
         created_by: user.id,
       });
 

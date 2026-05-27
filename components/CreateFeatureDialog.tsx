@@ -40,6 +40,8 @@ export default function CreateFeatureDialog({
   });
   const [repos, setRepos] = useState<any[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState<string>("");
+  const [environments, setEnvironments] = useState<any[]>([]);
+  const [selectedEnvId, setSelectedEnvId] = useState<string>("");
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>("");
@@ -52,6 +54,15 @@ export default function CreateFeatureDialog({
       .then((data) => {
         setRepos(data.repos ?? []);
         if (data.repos?.length) setSelectedRepoId(data.repos[0].id);
+      })
+      .catch(() => {});
+    fetch("/api/environments")
+      .then((r) => r.json())
+      .then((data) => {
+        setEnvironments(data.environments ?? []);
+        const def = (data.environments ?? []).find((e: any) => e.is_default);
+        if (def) setSelectedEnvId(def.id);
+        else if (data.environments?.length) setSelectedEnvId(data.environments[0].id);
       })
       .catch(() => {});
   }, []);
@@ -157,6 +168,7 @@ export default function CreateFeatureDialog({
         body: JSON.stringify({
           ...form,
           repository_id: selectedRepoId || undefined,
+          environment_id: selectedEnvId || undefined,
           github_parent_issue:
             parseInt(form.github_parent_issue, 10) || 0,
           attachment_paths: attachmentPaths,
@@ -248,12 +260,11 @@ export default function CreateFeatureDialog({
             {field("description", "descrição", "O que precisa ser feito?", true)}
             <div>
               <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
-                repositório
+                aplicação
               </label>
               {repos.length === 0 ? (
                 <div className="text-[11px] text-planning border border-planning/40 bg-planning/5 p-2">
-                  nenhum repositório no projeto. Adicione um em /settings →
-                  projeto.
+                  nenhuma aplicação no time. Adicione uma em /settings → aplicações.
                 </div>
               ) : (
                 <select
@@ -266,6 +277,31 @@ export default function CreateFeatureDialog({
                       {r.label ?? r.github_repo} ({r.github_repo})
                     </option>
                   ))}
+                </select>
+              )}
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+                ambiente
+              </label>
+              {environments.length === 0 ? (
+                <div className="text-[11px] text-planning border border-planning/40 bg-planning/5 p-2">
+                  nenhum ambiente no time. Crie em /settings → ambientes.
+                </div>
+              ) : (
+                <select
+                  value={selectedEnvId}
+                  onChange={(e) => setSelectedEnvId(e.target.value)}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+                >
+                  {environments.map((e) => {
+                    const b = (e.branches ?? []).find((x: any) => x.repository_id === selectedRepoId);
+                    return (
+                      <option key={e.id} value={e.id}>
+                        {e.name}{b ? ` → ${b.branch}` : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               )}
             </div>

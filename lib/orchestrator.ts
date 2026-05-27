@@ -1,3 +1,4 @@
+import { notifyStageCompleted } from "@/lib/notify";
 /**
  * Orquestrador: um card por feature percorrendo as raias.
  * Agents carregados de agent_definitions (DB).
@@ -49,15 +50,56 @@ async function getAppSettings(projectId?: string) {
  * Inclui: tipo de aplicação (nova/existente), stack, arquivo de instruções e a
  * base de conhecimento. É o que faz os agentes respeitarem o legado existente.
  */
-async function getProjectContextBlock(projectId?: string): Promise<string> {
+async function getProjectContextBlock(
+  projectId?: string,
+  repositoryId?: string,
+  environmentId?: string
+): Promise<string> {
   if (!projectId) return "";
   const sb = createServiceClient();
-  const { data: project } = await sb
-    .from("projects")
-    .select("app_type, app_kind, tech_stack, instructions_path")
-    .eq("id", projectId)
-    .maybeSingle();
+
+  // Config da APLICAÇÃO (repositório). Cai para o projeto se faltar.
+  let appCfg: any = null;
+  if (repositoryId) {
+    const { data } = await sb
+      .from("project_repositories")
+      .select("label, github_repo, app_type, app_kind, tech_stack, instructions_path")
+      .eq("id", repositoryId)
+      .maybeSingle();
+    appCfg = data;
+  }
+  if (!appCfg) {
+    const { data: project } = await sb
+      .from("projects")
+      .select("app_type, app_kind, tech_stack, instructions_path")
+      .eq("id", projectId)
+      .maybeSingle();
+    appCfg = project;
+  }
+  const project = appCfg;
   if (!project) return "";
+
+  // Ambiente alvo + branch da aplicação nesse ambiente
+  let envLine = "";
+  if (environmentId) {
+    const { data: env } = await sb
+      .from("environments")
+      .select("name")
+      .eq("id", environmentId)
+      .maybeSingle();
+    let branch: string | null = null;
+    if (repositoryId) {
+      const { data: eb } = await sb
+        .from("environment_branches")
+        .select("branch")
+        .eq("environment_id", environmentId)
+        .eq("repository_id", repositoryId)
+        .maybeSingle();
+      branch = eb?.branch ?? null;
+    }
+    if (env)
+      envLine = `Ambiente alvo: ${env.name}${branch ? ` (branch base: ${branch})` : ""}\n`;
+  }
 
   const { data: knowledge } = await sb
     .from("project_knowledge")
@@ -65,7 +107,7 @@ async function getProjectContextBlock(projectId?: string): Promise<string> {
     .eq("project_id", projectId)
     .order("created_at", { ascending: true });
 
-  // Repositórios do projeto (multi-repo) + dependências declaradas
+  // Aplicações do time (multi-repo) + dependências declaradas
   const { data: repos } = await sb
     .from("project_repositories")
     .select("label, github_repo, depends_on, description")
@@ -81,6 +123,9 @@ async function getProjectContextBlock(projectId?: string): Promise<string> {
 
   const isExisting = project.app_type === "existing";
   let block = `\n--- PROJECT CONTEXT ---\n`;
+  if (project.label || project.github_repo)
+    block += `Aplicação: ${project.label ?? project.github_repo}\n`;
+  if (envLine) block += envLine;
   block += `Application type: ${isExisting ? "EXISTING / legacy codebase" : "NEW / greenfield"}\n`;
   if (project.app_kind) block += `Kind: ${project.app_kind}\n`;
   if (project.tech_stack) block += `Tech stack: ${project.tech_stack}\n`;
@@ -270,7 +315,7 @@ export async function previewKickoff(
     attachments,
     settings
   );
-  const projectBlock = await getProjectContextBlock(feature.project_id);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id);
   const initial_message = projectBlock ? `${projectBlock}\n${baseMsg}` : baseMsg;
 
   return {
@@ -319,7 +364,7 @@ export async function startStage(
   }
 
   // Injeta o contexto do projeto (tipo de app, stack, instruções, conhecimento)
-  const projectBlock = await getProjectContextBlock(feature.project_id);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id);
   if (projectBlock) userMsg = `${projectBlock}\n${userMsg}`;
 
   const session = await beta.sessions.create({
@@ -745,6 +790,7 @@ export async function advanceCard(
       .from("cards")
       .update({ status: "done", stage: "done", claude_session_id: null })
       .eq("id", cardId);
+    await notifyStageCompleted(cardId, card.stage, "done");
     return;
   }
 
@@ -757,6 +803,8 @@ export async function advanceCard(
       claude_session_id: null,
     })
     .eq("id", cardId);
+
+  await notifyStageCompleted(cardId, card.stage, nextStage);
 
   // Development tem orquestração própria: lê chunks e dispara um Dev Agent
   // por chunk seguindo o build order. As outras stages disparam uma sessão única.
@@ -1170,6 +1218,7 @@ export async function createFeature(input: {
   github_parent_issue: number;
   project_id: string;
   repository_id?: string;
+  environment_id?: string;
   created_by?: string;
 }): Promise<{ feature_id: string; card_id: string }> {
   const sb = createServiceClient();
@@ -1453,7 +1502,7 @@ export async function startNextChunk(cardId: string): Promise<void> {
     attachments,
     settings
   );
-  const projectBlock = await getProjectContextBlock(feature.project_id);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id);
   const userMsg = projectBlock ? `${projectBlock}\n${baseChunkMsg}` : baseChunkMsg;
 
   const session = await beta.sessions.create({

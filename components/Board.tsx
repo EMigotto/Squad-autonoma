@@ -314,7 +314,7 @@ export default function Board({
           {/* Seletor de projeto */}
           <div className="flex items-center gap-2 border-l border-ink-700 pl-6">
             <span className="text-[10px] uppercase tracking-widest text-ink-400">
-              projeto
+              time
             </span>
             {projects.length > 0 ? (
               <select
@@ -333,7 +333,7 @@ export default function Board({
                 href="/settings"
                 className="text-xs text-planning hover:underline"
               >
-                criar projeto →
+                criar time →
               </Link>
             )}
           </div>
@@ -386,7 +386,7 @@ export default function Board({
 
       {diagnostics?.noProject && (
         <div className="border-b border-planning bg-planning/10 px-6 py-2 text-xs text-planning font-mono">
-          ⚠ nenhum projeto ativo. Crie um projeto em{" "}
+          ⚠ nenhum time ativo. Crie um time em{" "}
           <Link href="/settings" className="underline">
             /settings
           </Link>{" "}
