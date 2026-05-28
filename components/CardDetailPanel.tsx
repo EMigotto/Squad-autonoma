@@ -669,7 +669,10 @@ export default function CardDetailPanel({
             )}
 
             {isTerminal && card.stage === "done" && (
-              <PromoteSection cardId={cardId} />
+              <>
+                <InfrastructureSection cardId={cardId} />
+                <PromoteSection cardId={cardId} />
+              </>
             )}
 
             {isTerminal && (
@@ -1335,6 +1338,74 @@ function StageCostBreakdown({ stages, currency }: { stages: any[]; currency: str
         ao término de cada execução.
       </div>
     </section>
+  );
+}
+
+function InfrastructureSection({ cardId }: { cardId: string }) {
+  const [generating, setGenerating] = useState(false);
+  const [summary, setSummary] = useState<string>("");
+  const [artifactUrl, setArtifactUrl] = useState<string>("");
+  const [error, setError] = useState<string>("");
+
+  async function generate() {
+    setGenerating(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/cards/${cardId}/infrastructure-summary`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) setError(data.error ?? `HTTP ${res.status}`);
+      else {
+        setSummary(data.summary ?? "");
+        setArtifactUrl(data.artifact_url ?? "");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <Section title="infraestrutura necessária">
+      <div className="text-xs text-ink-400 mb-3 leading-relaxed">
+        Sintetiza tudo que essa feature precisa para rodar — bancos, caches,
+        filas, buckets, serviços de terceiros, variáveis de ambiente — a partir
+        do PRD, do plano, dos ADRs e do{" "}
+        <span className="font-mono text-ink-300">infrastructure.md</span>{" "}
+        mantido pelos agentes durante o desenvolvimento. Usa o modelo mais forte
+        (Opus 4.7) e termina com um bloco JSON pronto pra ser lido por um
+        provisionador via MCP.
+      </div>
+      <div className="flex items-center gap-3 mb-3">
+        <button
+          onClick={generate}
+          disabled={generating}
+          className="bg-discovery text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-discovery/80 disabled:opacity-50"
+        >
+          {generating ? "gerando com Opus…" : summary ? "regerar resumo" : "gerar resumo de infraestrutura"}
+        </button>
+        {artifactUrl && (
+          <a
+            href={artifactUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-development hover:underline"
+          >
+            ver artefato salvo no GitHub ↗
+          </a>
+        )}
+        {error && <span className="text-xs text-qa">erro: {error}</span>}
+      </div>
+      {summary && (
+        <div className="border border-ink-700 bg-ink-900/40 p-3 max-h-[60vh] overflow-y-auto">
+          <pre className="text-xs text-ink-100 whitespace-pre-wrap font-mono leading-relaxed">
+            {summary}
+          </pre>
+        </div>
+      )}
+    </Section>
   );
 }
 

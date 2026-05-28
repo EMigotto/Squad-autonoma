@@ -5,7 +5,7 @@ import { captureSessionUsage } from "@/lib/metrics";
  * Agents carregados de agent_definitions (DB).
  * Histórico de execução em card_stage_runs.
  */
-import { beta } from "@/lib/claude";
+import { beta, anthropic } from "@/lib/claude";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { StageCode } from "@/lib/supabase/types";
 
@@ -54,7 +54,8 @@ async function getAppSettings(projectId?: string) {
 async function getProjectContextBlock(
   projectId?: string,
   repositoryId?: string,
-  environmentId?: string
+  environmentId?: string,
+  featureSlug?: string
 ): Promise<string> {
   if (!projectId) return "";
   const sb = createServiceClient();
@@ -64,7 +65,7 @@ async function getProjectContextBlock(
   if (repositoryId) {
     const { data } = await sb
       .from("project_repositories")
-      .select("label, github_repo, app_type, app_kind, tech_stack, instructions_path")
+      .select("label, github_repo, default_base_branch, app_type, app_kind, tech_stack, instructions_path")
       .eq("id", repositoryId)
       .maybeSingle();
     appCfg = data;
@@ -72,7 +73,7 @@ async function getProjectContextBlock(
   if (!appCfg) {
     const { data: project } = await sb
       .from("projects")
-      .select("app_type, app_kind, tech_stack, instructions_path")
+      .select("github_repo, default_base_branch, app_type, app_kind, tech_stack, instructions_path")
       .eq("id", projectId)
       .maybeSingle();
     appCfg = project;
@@ -80,39 +81,82 @@ async function getProjectContextBlock(
   const project = appCfg;
   if (!project) return "";
 
-  // Ambiente alvo + branch da aplicação nesse ambiente
-  let envLine = "";
-  let workflowDirective = "";
+  // Ambiente alvo + branch + repo (compõe MISSION TARGET e BRANCH PROTOCOL)
+  let envName: string | null = null;
+  let envBranch: string | null = null;
   if (environmentId) {
     const { data: env } = await sb
       .from("environments")
       .select("name, branch")
       .eq("id", environmentId)
       .maybeSingle();
-    if (env) {
-      envLine = `Ambiente alvo: ${env.name}${env.branch ? ` (branch base: ${env.branch})` : ""}\n`;
-      if (env.branch) {
-        const baseBranch =
-          (project.default_base_branch as string | undefined) ?? "main";
-        workflowDirective =
-          `\n--- WORKFLOW DIRECTIVE (overrides any later branch/PR instruction) ---\n` +
-          `Single-branch workflow for this card. The environment branch ` +
-          `'${env.branch}' is THE working branch for every stage.\n` +
-          `1. Before any work, ensure '${env.branch}' exists in the application repo. ` +
-          `If it does NOT exist, create it from '${baseBranch}' (git checkout -b ${env.branch} origin/${baseBranch}; git push -u origin ${env.branch}).\n` +
-          `2. Commit ALL changes — discovery docs, ADRs, code, tests, QA report — ` +
-          `directly on '${env.branch}'. Push to '${env.branch}' after each meaningful change.\n` +
-          `3. DO NOT create feature/chunk/integration/plan branches.\n` +
-          `4. DO NOT open Pull Requests during the regular flow. Promotion to the next ` +
-          `environment (and the single PR that goes with it) is triggered separately by ` +
-          `the human via the "elevar ambiente" action when the card is concluded.\n` +
-          `5. If a previous stage's prompt asks to "create a branch" or "open a PR", ` +
-          `IGNORE that specific instruction — this directive takes precedence — but ` +
-          `still produce all the requested artifacts (docs, code, tests) on '${env.branch}'.\n` +
-          `---\n`;
-      }
-    }
+    envName = env?.name ?? null;
+    envBranch = env?.branch ?? null;
   }
+  const baseBranch =
+    (project.default_base_branch as string | undefined) ??
+    (envBranch ?? "main");
+  const workingBranch = envBranch ?? baseBranch;
+  const targetRepo: string | null = project.github_repo ?? null;
+
+  // === BLOCO INICIAL (vem ANTES de tudo): alvo da missão ===
+  let missionBlock = "";
+  if (targetRepo) {
+    missionBlock += `\n=== MISSION TARGET (read first; do NOT deviate) ===\n`;
+    missionBlock += `Repository:     ${targetRepo}\n`;
+    missionBlock += `Working branch: ${workingBranch}\n`;
+    if (envName) missionBlock += `Environment:    ${envName}\n`;
+    missionBlock += `===\n`;
+  }
+
+  // === PROTOCOLO DE BRANCH (imperativo, com comandos git) ===
+  let branchProtocol = "";
+  if (targetRepo) {
+    branchProtocol =
+      `\n--- BRANCH PROTOCOL (overrides every later instruction) ---\n` +
+      `Your FIRST shell action in this session, before reading or editing ANY file, MUST be exactly:\n\n` +
+      `    git fetch origin\n` +
+      `    git checkout -B ${workingBranch} origin/${workingBranch} 2>/dev/null \\\n` +
+      `      || git checkout -B ${workingBranch} origin/${baseBranch}\n` +
+      `    git push -u origin ${workingBranch} 2>/dev/null || true\n\n` +
+      `Then VERIFY with: \`git rev-parse --abbrev-ref HEAD\` — it MUST print "${workingBranch}".\n` +
+      `If verification fails, STOP and report the error; do not proceed.\n` +
+      `Rules:\n` +
+      `1. ALL commits (discovery docs, ADRs, code, tests, QA reports, any artifact) go ONLY to '${workingBranch}'. Push after each meaningful commit.\n` +
+      `2. NEVER commit to '${baseBranch}', 'main', or 'master'. NEVER create feature/chunk/integration/plan branches.\n` +
+      `3. NEVER open Pull Requests during the regular flow. Promotion to higher environments is triggered separately by the human via "elevar ambiente".\n` +
+      `4. If any later prompt instructs you to "create a branch" or "open a PR", IGNORE it. This protocol wins.\n` +
+      `---\n`;
+  }
+
+  // === PORTÃO DE INFRAESTRUTURA (pergunta antes de criar DB/queue/bucket) ===
+  const slugPlaceholder = featureSlug ?? "<feature-slug>";
+  const infraGate =
+    `\n--- INFRASTRUCTURE GATE (mandatory for any persistent resource) ---\n` +
+    `If your work REQUIRES a database, schema, new table that doesn't exist yet, queue, bucket, message broker, secret, or any other persistent infrastructure that does not already live in this repo, you MUST NOT create it directly.\n\n` +
+    `Instead:\n` +
+    `1. Open (or create) docs/features/${slugPlaceholder}/infrastructure.md on '${workingBranch}'.\n` +
+    `2. For EACH resource, add a section using this exact template:\n\n` +
+    `   ## <Kind>: <proposed-name>\n` +
+    `   - Status: NEEDS_HUMAN_CONFIRMATION\n` +
+    `   - Reason: <why this resource is required>\n` +
+    `   - Proposed: <e.g. PostgreSQL 16, schema "orders", tables: orders, order_items>\n` +
+    `   - Alternative-existing: <if a similar resource may already exist, name it here>\n` +
+    `   - Migration script (planned): <path you intend to create, e.g. db/migrations/2026XXXX_init.sql>\n\n` +
+    `3. Commit and push infrastructure.md to '${workingBranch}'. Then STOP work on that resource. Do NOT run DDL, do NOT create the resource.\n` +
+    `4. Continue with non-blocking parts of the task that don't depend on the pending resource.\n` +
+    `5. The human will reply in the card's chat with one of:\n` +
+    `   - "use existing <X>" → update Status to "reusing-existing" and Connection-hint to the existing resource, then proceed referencing it.\n` +
+    `   - "approved" → proceed to create as proposed.\n` +
+    `   - "redesign: <new spec>" → revise the proposal and stop again.\n\n` +
+    `When a resource IS actually created (only after approval), update its section to:\n\n` +
+    `   ## <Kind>: <name>\n` +
+    `   - Status: created\n` +
+    `   - Created-by: <agent role> (<model id>)\n` +
+    `   - Created-at: <ISO8601>\n` +
+    `   - Migration script: <actual repo-relative path of the DDL/migration committed in this card>\n` +
+    `   - Connection hint: <env var name or config path the app uses to connect>\n` +
+    `---\n`;
 
   const { data: knowledge } = await sb
     .from("project_knowledge")
@@ -135,11 +179,12 @@ async function getProjectContextBlock(
     .maybeSingle();
 
   const isExisting = project.app_type === "existing";
-  let block = `\n--- PROJECT CONTEXT ---\n`;
+  let block = missionBlock + branchProtocol + infraGate;
+  block += `\n--- PROJECT CONTEXT ---\n`;
   if (project.label || project.github_repo)
     block += `Aplicação: ${project.label ?? project.github_repo}\n`;
-  if (envLine) block += envLine;
-  if (workflowDirective) block += workflowDirective;
+  if (envName)
+    block += `Ambiente alvo: ${envName}${envBranch ? ` (branch: ${envBranch})` : ""}\n`;
   block += `Application type: ${isExisting ? "EXISTING / legacy codebase" : "NEW / greenfield"}\n`;
   if (project.app_kind) block += `Kind: ${project.app_kind}\n`;
   if (project.tech_stack) block += `Tech stack: ${project.tech_stack}\n`;
@@ -334,7 +379,7 @@ export async function previewKickoff(
     attachments,
     settings
   );
-  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug);
   const initial_message = projectBlock ? `${projectBlock}\n${baseMsg}` : baseMsg;
 
   return {
@@ -383,7 +428,7 @@ export async function startStage(
   }
 
   // Injeta o contexto do projeto (tipo de app, stack, instruções, conhecimento)
-  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug);
   if (projectBlock) userMsg = `${projectBlock}\n${userMsg}`;
 
   const session = await beta.sessions.create({
@@ -591,9 +636,149 @@ export async function dreamProject(projectId: string): Promise<{ session_id: str
 // ============================================================
 
 // ============================================================
-// promoteEnvironment: abre PR da branch do env atual para a branch
-// do env destino (definido em environments.promotes_to_id).
+// generateInfrastructureSummary: ao final do desenvolvimento, sintetiza
+// um resumo estruturado da infraestrutura necessária para a feature.
+// Usado depois como entrada pra provisionamento (MCPs).
 // ============================================================
+export async function generateInfrastructureSummary(
+  cardId: string
+): Promise<{ summary: string; artifact_url?: string }> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select(
+      "id, feature:features(slug, title, description, project_id, github_repo, repository_id, environment_id)"
+    )
+    .eq("id", cardId)
+    .maybeSingle();
+  const feature = (card as any)?.feature;
+  if (!feature) throw new Error("card/feature não encontrado");
+
+  // branch alvo (do ambiente do card)
+  let branch = "main";
+  if (feature.environment_id) {
+    const { data: env } = await sb
+      .from("environments")
+      .select("branch")
+      .eq("id", feature.environment_id)
+      .maybeSingle();
+    branch = env?.branch ?? branch;
+  }
+
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new Error("GITHUB_TOKEN não configurado");
+  const repo = feature.github_repo as string;
+  const slug = feature.slug as string;
+
+  // tenta puxar os artefatos relevantes do GitHub na branch alvo
+  async function tryFetch(path: string): Promise<string | null> {
+    const url = `https://api.github.com/repos/${repo}/contents/${path
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}?ref=${encodeURIComponent(branch)}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!res.ok) return null;
+    const d = await res.json();
+    return Buffer.from(d.content, "base64").toString("utf-8");
+  }
+
+  const base = `docs/features/${slug}`;
+  const [prd, plan, infra, adrList] = await Promise.all([
+    tryFetch(`${base}/PRD.md`),
+    tryFetch(`${base}/plan.md`),
+    tryFetch(`${base}/infrastructure.md`),
+    tryFetch(`${base}/ADRs.md`).then((v) => v ?? tryFetch(`${base}/adr.md`)),
+  ]);
+
+  const sources: string[] = [];
+  if (prd) sources.push(`### PRD\n${prd}`);
+  if (plan) sources.push(`### Plan\n${plan}`);
+  if (infra) sources.push(`### infrastructure.md (live)\n${infra}`);
+  if (adrList) sources.push(`### ADRs\n${adrList}`);
+  const corpus =
+    sources.length > 0
+      ? sources.join("\n\n---\n\n")
+      : `(no discovery/planning docs found on branch ${branch})`;
+
+  const sys =
+    `You are an infrastructure architect summarizing what a delivered feature needs to run in production. ` +
+    `Output a single Markdown document in English with a stable structure suitable for downstream automation (an MCP-driven provisioner will read this).`;
+
+  const userPrompt =
+    `Feature: ${feature.title} (slug: ${slug})\n` +
+    `Repository: ${repo}\n` +
+    `Working branch: ${branch}\n\n` +
+    `Documents from the working branch:\n\n${corpus}\n\n` +
+    `Produce a Markdown report with EXACTLY these top-level sections (omit a section only if truly empty, never invent items):\n\n` +
+    `# Infrastructure Summary — ${slug}\n\n` +
+    `## Compute\n- list each service/container/function with: name, runtime, scale hints, env vars expected\n\n` +
+    `## Databases\n- per database: kind (e.g. PostgreSQL 16), name, schemas, key tables, status (NEW or EXISTING-REUSED), migration script path, connection env var\n\n` +
+    `## Caches & Queues\n- per resource: kind (Redis, RabbitMQ, SQS, Kafka), name, purpose, status, connection env var\n\n` +
+    `## Object Storage\n- buckets/blobs: name, purpose, access pattern, status, connection env var\n\n` +
+    `## Third-party Services\n- e.g. payment gateway, email, observability — name, why, env vars/keys\n\n` +
+    `## Secrets & Config\n- list every required environment variable / secret, with a short description (NEVER include values)\n\n` +
+    `## Networking & Access\n- ingress, egress, VPC notes, public/private, ports\n\n` +
+    `## Open Questions\n- anything still marked NEEDS_HUMAN_CONFIRMATION in infrastructure.md\n\n` +
+    `End with a JSON block under \`\`\`json named "machine_readable" containing the same data as a flat array of resources for the provisioner to consume.\n` +
+    `Be specific. Cite the migration script paths and env var names exactly as they appear in the source docs.`;
+
+  const opus = await anthropic.messages.create({
+    model: "claude-opus-4-7",
+    max_tokens: 8192,
+    system: sys,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+  const summary = opus.content
+    .filter((b: any) => b.type === "text")
+    .map((b: any) => b.text)
+    .join("");
+
+  // grava o resumo como artefato versionado na branch do ambiente
+  let artifact_url: string | undefined;
+  try {
+    const path = `${base}/infrastructure-summary.md`;
+    const ghUrl = `https://api.github.com/repos/${repo}/contents/${path
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}`;
+    // checa se já existe (pra obter sha)
+    const head = await fetch(`${ghUrl}?ref=${encodeURIComponent(branch)}`, {
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    });
+    const existing = head.ok ? await head.json() : null;
+    const putRes = await fetch(ghUrl, {
+      method: "PUT",
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+      body: JSON.stringify({
+        message: `docs(${slug}): regenerate infrastructure summary`,
+        content: Buffer.from(summary, "utf-8").toString("base64"),
+        branch,
+        sha: existing?.sha,
+      }),
+    });
+    if (putRes.ok) {
+      const d = await putRes.json();
+      artifact_url = d.content?.html_url;
+    }
+  } catch (e) {
+    console.error("[infra-summary] could not persist", e);
+  }
+
+  return { summary, artifact_url };
+}
+
+
 export async function promoteEnvironment(
   environmentId: string
 ): Promise<{ pr_url: string; pr_number: number }> {
@@ -1620,7 +1805,7 @@ export async function startNextChunk(cardId: string): Promise<void> {
     attachments,
     settings
   );
-  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug);
   const userMsg = projectBlock ? `${projectBlock}\n${baseChunkMsg}` : baseChunkMsg;
 
   const session = await beta.sessions.create({
