@@ -16,6 +16,7 @@ interface Settings {
   token_cost_input_mtok?: number;
   token_cost_output_mtok?: number;
   metrics_currency?: string;
+  usd_to_brl?: number;
   require_reinforced_review?: boolean;
   sensitive_paths?: string;
 }
@@ -299,9 +300,10 @@ export default function SettingsPage() {
             O <strong>custo humano/hora</strong> é calculado automaticamente a
             partir das pessoas cadastradas acima (média de salário ÷ horas). Você
             pode sobrescrevê-lo manualmente aqui se preferir. O custo de tokens é
-            usado quando a captura de uso estiver ativa.
+            <strong> automático</strong>: a tabela oficial da Anthropic é aplicada
+            ao modelo de cada execução; você só precisa do câmbio USD → BRL.
           </div>
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="text-[11px] text-ink-400 block mb-1">
                 custo humano / hora
@@ -315,23 +317,13 @@ export default function SettingsPage() {
             </div>
             <div>
               <label className="text-[11px] text-ink-400 block mb-1">
-                custo input / Mtok
+                câmbio USD → BRL
               </label>
               <input
                 type="number"
-                value={settings.token_cost_input_mtok ?? 0}
-                onChange={(e) => update("token_cost_input_mtok", Number(e.target.value) as any)}
-                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-ink-400 block mb-1">
-                custo output / Mtok
-              </label>
-              <input
-                type="number"
-                value={settings.token_cost_output_mtok ?? 0}
-                onChange={(e) => update("token_cost_output_mtok", Number(e.target.value) as any)}
+                step="0.01"
+                value={settings.usd_to_brl ?? 5.0}
+                onChange={(e) => update("usd_to_brl", Number(e.target.value) as any)}
                 className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
               />
             </div>
@@ -345,6 +337,42 @@ export default function SettingsPage() {
               />
             </div>
           </div>
+
+          <details className="mt-3 text-[11px]">
+            <summary className="cursor-pointer text-ink-300 hover:text-ink-100">
+              tabela automática de preços (USD por 1M tokens) · clique pra ver
+            </summary>
+            <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-ink-400">
+              <div><span className="text-ink-200">Opus 4.7 / 4.6</span> · $5 in · $25 out</div>
+              <div><span className="text-ink-200">Sonnet 4.6</span> · $3 in · $15 out</div>
+              <div><span className="text-ink-200">Haiku 4.5</span> · $1 in · $5 out</div>
+              <div className="text-ink-500">Opus 4.1 (legado) · $15 / $75</div>
+            </div>
+            <div className="text-ink-500 mt-2">
+              Override manual: se preencher os campos abaixo, eles substituem a
+              tabela automática (em R$/Mtok). Útil para contratos negociados.
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <div>
+                <label className="text-[10px] text-ink-500 block mb-1">override input / Mtok (R$)</label>
+                <input
+                  type="number"
+                  value={settings.token_cost_input_mtok ?? 0}
+                  onChange={(e) => update("token_cost_input_mtok", Number(e.target.value) as any)}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1 text-xs text-ink-100 focus:border-discovery focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-ink-500 block mb-1">override output / Mtok (R$)</label>
+                <input
+                  type="number"
+                  value={settings.token_cost_output_mtok ?? 0}
+                  onChange={(e) => update("token_cost_output_mtok", Number(e.target.value) as any)}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1 text-xs text-ink-100 focus:border-discovery focus:outline-none"
+                />
+              </div>
+            </div>
+          </details>
           <button
             onClick={saveSettings}
             className="mt-4 bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300"

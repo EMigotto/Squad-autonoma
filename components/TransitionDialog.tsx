@@ -160,9 +160,28 @@ export default function TransitionDialog({
       .single();
 
     const gate = card?.human_gates?.find((g: any) => g.decision === null);
+
+    // Sem gate aberto: cai pra avanço manual via /move. Isso acontece quando a
+    // sessão terminou sem criar gate (ex.: card foi movido antes via D&D, ou a
+    // sincronização proativa não rodou). É um caminho explícito de aprovação.
     if (!gate) {
-      setError("nenhum gate aberto pra esse card");
-      setConfirming(false);
+      const res = await fetch(`/api/cards/${cardId}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stage: preview?.target_stage,
+          dispatch: true,
+          gate_decision: "approved",
+          gate_reason: "aprovado via diálogo de transição (sem gate prévio)",
+        }),
+      });
+      if (res.ok) {
+        onConfirm();
+      } else {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? `HTTP ${res.status}`);
+        setConfirming(false);
+      }
       return;
     }
 

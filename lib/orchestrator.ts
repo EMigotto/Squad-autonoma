@@ -417,6 +417,7 @@ export async function startStage(
     agent_role: def.role,
     claude_session_id: session.id,
     status: "running",
+    model: def.model,
   });
 
   await sb.from("card_chat_messages").insert({
@@ -1033,7 +1034,9 @@ const ALL_STAGES: StageCode[] = [
 export async function moveCardToStage(
   cardId: string,
   targetStage: StageCode,
-  dispatch: boolean = true
+  dispatch: boolean = true,
+  gateDecision: "approved" | "rejected" = "rejected",
+  gateReason?: string
 ): Promise<void> {
   const sb = createServiceClient();
   const { data: card } = await sb
@@ -1046,12 +1049,14 @@ export async function moveCardToStage(
     throw new Error(`stage inválida: ${targetStage}`);
   }
 
-  // Fecha gates abertos do card
+  // Fecha gates abertos do card (default rejected; pode ser approved quando vem
+  // do diálogo de aprovação como fallback)
   await sb
     .from("human_gates")
     .update({
-      decision: "rejected",
-      decision_reason: `movido manualmente para ${targetStage}`,
+      decision: gateDecision,
+      decision_reason:
+        gateReason ?? `movido manualmente para ${targetStage}`,
       decided_at: new Date().toISOString(),
     })
     .eq("card_id", cardId)
@@ -1642,6 +1647,7 @@ export async function startNextChunk(cardId: string): Promise<void> {
     claude_session_id: session.id,
     status: "running",
     summary: `Chunk #${nextChunk.github_issue_number}: ${nextChunk.title}`,
+    model: chosenDef.model,
   });
 
   await sb

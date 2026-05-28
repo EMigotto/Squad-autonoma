@@ -843,9 +843,11 @@ function ArtifactViewer({
   const enContent = artifact.content ?? "";
   const displayContent = lang === "pt" ? ptContent ?? "" : enContent;
 
-  async function ensurePtTranslation() {
-    if (ptContent || !enContent) return;
+  async function ensurePtTranslation(): Promise<boolean> {
+    if (ptContent) return true;
+    if (!enContent) return false;
     setTranslating(true);
+    setError("");
     try {
       const res = await fetch("/api/translate", {
         method: "POST",
@@ -853,18 +855,29 @@ function ArtifactViewer({
         body: JSON.stringify({ text: enContent, target: "pt" }),
       });
       const data = await res.json();
-      if (res.ok) setPtContent(data.translated);
-      else setError(data.error ?? `HTTP ${res.status}`);
+      if (!res.ok) {
+        setError(`tradução falhou: ${data.error ?? "HTTP " + res.status}`);
+        return false;
+      }
+      if (!data.translated) {
+        setError("tradução vazia retornada");
+        return false;
+      }
+      setPtContent(data.translated);
+      return true;
+    } catch (e) {
+      setError(`tradução falhou: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
     } finally {
       setTranslating(false);
     }
   }
 
   async function toggleLang() {
-    if (editing) return; // não troca idioma com edição aberta
+    if (editing) return;
     if (lang === "en") {
-      await ensurePtTranslation();
-      setLang("pt");
+      const ok = await ensurePtTranslation();
+      if (ok) setLang("pt");
     } else {
       setLang("en");
     }
@@ -1281,9 +1294,12 @@ function StageCostBreakdown({ stages, currency }: { stages: any[]; currency: str
               <tr key={s.id} className="border-t border-ink-800">
                 <td className="py-1 pr-3">
                   <div className="text-ink-200">{STAGE_LABEL[s.stage] ?? s.stage}</div>
-                  {s.agent_role && (
-                    <div className="text-[10px] text-ink-500">{s.agent_role}</div>
-                  )}
+                  <div className="text-[10px] text-ink-500">
+                    {s.agent_role}
+                    {s.model && (
+                      <span className="ml-1 text-ink-600">· {s.model}</span>
+                    )}
+                  </div>
                 </td>
                 <td className="text-right py-1 px-2 font-mono text-ink-300">
                   {s.input_tokens.toLocaleString("pt-BR")}
@@ -1312,10 +1328,11 @@ function StageCostBreakdown({ stages, currency }: { stages: any[]; currency: str
         </table>
       </div>
       <div className="text-[10px] text-ink-500 mt-2 leading-relaxed">
-        Custo de tokens calculado pelas taxas configuradas em Settings → indicadores
-        & custos. Horas humanas usam a duração da etapa multiplicada pelo custo/hora
-        do time. A captura de tokens ocorre ao término de cada execução (best-effort
-        pela API da Anthropic).
+        Custo de tokens é <strong>automático</strong>: usa a tabela oficial de
+        preços da Anthropic por modelo (USD/Mtok), convertida em BRL pelo câmbio
+        configurado em Settings → indicadores & custos. Horas humanas usam a
+        duração da etapa multiplicada pelo custo/hora do time. Captura ocorre
+        ao término de cada execução.
       </div>
     </section>
   );

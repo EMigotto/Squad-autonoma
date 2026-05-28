@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { computeCostUSD } from "@/lib/pricing";
 
 /**
  * Calcula a semana ISO (YYYY-Www) de uma data.
@@ -192,7 +193,7 @@ export async function captureSessionUsage(
   // localiza o stage_run pela session_id (último daquele card)
   const { data: run } = await sb
     .from("card_stage_runs")
-    .select("id, card_id, input_tokens, output_tokens, started_at, ended_at, feature:cards!inner(feature:features(project_id))")
+    .select("id, card_id, input_tokens, output_tokens, started_at, ended_at, model, feature:cards!inner(feature:features(project_id))")
     .eq("card_id", cardId)
     .eq("claude_session_id", sessionId)
     .order("started_at", { ascending: false })
@@ -200,25 +201,35 @@ export async function captureSessionUsage(
     .maybeSingle();
   if (!run) return;
 
-  // rates do projeto
+  // câmbio + override manual + custo/hora do projeto
   const projectId = (run as any)?.feature?.feature?.project_id;
-  let inMtok = 0, outMtok = 0, hourly = 0;
+  let usdToBrl = 5.0, hourly = 0, overrideIn = 0, overrideOut = 0;
   if (projectId) {
     const { data: s } = await sb
       .from("app_settings")
-      .select("token_cost_input_mtok, token_cost_output_mtok, human_hourly_cost")
+      .select("token_cost_input_mtok, token_cost_output_mtok, human_hourly_cost, usd_to_brl")
       .eq("project_id", projectId)
       .limit(1)
       .maybeSingle();
-    inMtok = Number(s?.token_cost_input_mtok ?? 0);
-    outMtok = Number(s?.token_cost_output_mtok ?? 0);
+    overrideIn = Number(s?.token_cost_input_mtok ?? 0);
+    overrideOut = Number(s?.token_cost_output_mtok ?? 0);
     hourly = Number(s?.human_hourly_cost ?? 0);
+    usdToBrl = Number(s?.usd_to_brl ?? 5.0);
   }
 
   // tokens são cumulativos no objeto session — só atualiza se vier maior
   const newIn = Math.max(inTok, Number((run as any).input_tokens ?? 0));
   const newOut = Math.max(outTok, Number((run as any).output_tokens ?? 0));
-  const tokenCost = (newIn / 1_000_000) * inMtok + (newOut / 1_000_000) * outMtok;
+
+  // Custo de tokens: AUTOMÁTICO pela tabela de preços (USD→BRL).
+  // Se o admin configurou override manual em R$/Mtok, esse override prevalece.
+  let tokenCost: number;
+  if (overrideIn > 0 || overrideOut > 0) {
+    tokenCost = (newIn / 1_000_000) * overrideIn + (newOut / 1_000_000) * overrideOut;
+  } else {
+    const usd = computeCostUSD((run as any).model, newIn, newOut);
+    tokenCost = usd * usdToBrl;
+  }
 
   // duração da etapa em horas (proxy para custo humano — tempo do revisor)
   const started = new Date((run as any).started_at);
@@ -250,6 +261,7 @@ export async function getStageCostBreakdown(cardId: string): Promise<{
     id: string;
     stage: string;
     agent_role: string | null;
+    model: string | null;
     started_at: string;
     ended_at: string | null;
     status: string;
@@ -267,7 +279,7 @@ export async function getStageCostBreakdown(cardId: string): Promise<{
   const { data: runs } = await sb
     .from("card_stage_runs")
     .select(
-      "id, stage, agent_role, started_at, ended_at, status, input_tokens, output_tokens, token_cost, human_hours, human_cost, total_cost"
+      "id, stage, agent_role, model, started_at, ended_at, status, input_tokens, output_tokens, token_cost, human_hours, human_cost, total_cost"
     )
     .eq("card_id", cardId)
     .order("started_at", { ascending: true });
@@ -297,6 +309,7 @@ export async function getStageCostBreakdown(cardId: string): Promise<{
       id: r.id,
       stage: r.stage,
       agent_role: r.agent_role,
+      model: r.model ?? null,
       started_at: r.started_at,
       ended_at: r.ended_at,
       status: r.status,

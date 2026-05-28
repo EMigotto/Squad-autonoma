@@ -24,7 +24,13 @@ export async function POST(
       return NextResponse.json({ error: "stage required" }, { status: 400 });
     }
 
-    await moveCardToStage(params.id, targetStage, dispatch);
+    await moveCardToStage(
+      params.id,
+      targetStage,
+      dispatch,
+      body.gate_decision === "approved" ? "approved" : "rejected",
+      body.gate_reason
+    );
     return NextResponse.json({ status: "moved", stage: targetStage });
   } catch (e) {
     return NextResponse.json(

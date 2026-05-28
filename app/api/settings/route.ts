@@ -63,6 +63,7 @@ export async function PUT(req: Request) {
     "token_cost_input_mtok",
     "token_cost_output_mtok",
     "metrics_currency",
+    "usd_to_brl",
     "require_reinforced_review",
     "sensitive_paths",
   ];
