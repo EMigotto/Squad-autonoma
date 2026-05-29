@@ -942,10 +942,22 @@ function PeopleSection() {
                 className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
             </div>
             <div>
-              <label className="text-[11px] text-ink-400 block mb-1">cargo</label>
-              <input value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}
-                placeholder="ex: Dev Sênior"
-                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
+              <label className="text-[11px] text-ink-400 block mb-1">cargo (tipo do agente)</label>
+              <select
+                value={form.role}
+                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+              >
+                <option value="">— escolha —</option>
+                <option value="pm">PM</option>
+                <option value="tech_lead">Tech Lead</option>
+                <option value="dev">Dev</option>
+                <option value="qa">QA</option>
+              </select>
+              <div className="text-[10px] text-ink-500 mt-1">
+                o custo da etapa usa a média do papel correspondente:{" "}
+                Discovery→PM, Planejamento/Code Review→Tech Lead, Dev→Dev, QA→QA.
+              </div>
             </div>
             <div>
               <label className="text-[11px] text-ink-400 block mb-1">salário/mês</label>

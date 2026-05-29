@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import AssistantFAB from "@/components/AssistantFAB";
 
 interface Weekly {
   week: string;
@@ -60,6 +61,7 @@ export default function DashboardsPage() {
 
   return (
     <div className="min-h-screen bg-ink-950 text-ink-100 p-6">
+      <AssistantFAB />
       <div className="max-w-6xl mx-auto space-y-8">
         <div className="flex items-start justify-between">
           <div>
@@ -70,13 +72,41 @@ export default function DashboardsPage() {
               Dashboards<span className="text-discovery">.</span>
             </h1>
           </div>
-          <Link
-            href="/"
-            className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100"
-          >
-            ← voltar ao board
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/assistant"
+              className="text-xs uppercase tracking-widest text-ink-950 bg-discovery hover:bg-discovery/80 px-3 py-1.5 font-semibold flex items-center gap-1.5"
+              title="abrir Squad Assistant"
+            >
+              <span className="text-base leading-none">◈</span>
+              assistente
+            </Link>
+            <Link
+              href="/"
+              className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100"
+            >
+              ← voltar ao board
+            </Link>
+          </div>
         </div>
+
+        {/* BANNER ASSISTENTE */}
+        <Link
+          href="/assistant"
+          className="block border border-discovery/40 bg-discovery/5 hover:bg-discovery/10 px-4 py-3 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-2xl text-discovery">◈</span>
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-ink-100">Squad Assistant</div>
+              <div className="text-[11px] text-ink-400">
+                pergunte ao vivo o que está rodando, qual agente está
+                processando, tempo restante e gastos — modelo selecionável (Haiku/Sonnet/Opus)
+              </div>
+            </div>
+            <span className="text-xs text-discovery uppercase tracking-widest">abrir →</span>
+          </div>
+        </Link>
 
         {/* FILTROS */}
         <div className="flex flex-wrap items-end gap-3 border border-ink-700 bg-ink-900/40 p-4">

@@ -193,7 +193,7 @@ export async function captureSessionUsage(
   // localiza o stage_run pela session_id (último daquele card)
   const { data: run } = await sb
     .from("card_stage_runs")
-    .select("id, card_id, input_tokens, output_tokens, started_at, ended_at, model, feature:cards!inner(feature:features(project_id))")
+    .select("id, card_id, input_tokens, output_tokens, started_at, ended_at, model, agent_role, feature:cards!inner(feature:features(project_id))")
     .eq("card_id", cardId)
     .eq("claude_session_id", sessionId)
     .order("started_at", { ascending: false })
@@ -201,20 +201,22 @@ export async function captureSessionUsage(
     .maybeSingle();
   if (!run) return;
 
-  // câmbio + override manual + custo/hora do projeto
+  // câmbio + override manual + custo/hora POR PAPEL do agente
   const projectId = (run as any)?.feature?.feature?.project_id;
+  const agentRole: string | null = (run as any)?.agent_role ?? null;
   let usdToBrl = 5.0, hourly = 0, overrideIn = 0, overrideOut = 0;
   if (projectId) {
     const { data: s } = await sb
       .from("app_settings")
-      .select("token_cost_input_mtok, token_cost_output_mtok, human_hourly_cost, usd_to_brl")
+      .select("token_cost_input_mtok, token_cost_output_mtok, usd_to_brl")
       .eq("project_id", projectId)
       .limit(1)
       .maybeSingle();
     overrideIn = Number(s?.token_cost_input_mtok ?? 0);
     overrideOut = Number(s?.token_cost_output_mtok ?? 0);
-    hourly = Number(s?.human_hourly_cost ?? 0);
     usdToBrl = Number(s?.usd_to_brl ?? 5.0);
+    // custo/hora vem das PESSOAS com o papel mapeado do agente
+    hourly = await getHourlyRateForAgent(projectId, agentRole);
   }
 
   // tokens são cumulativos no objeto session — só atualiza se vier maior
@@ -323,4 +325,50 @@ export async function getStageCostBreakdown(cardId: string): Promise<{
     };
   });
   return { stages, currency };
+}
+
+// ============================================================
+// Custo/hora por PAPEL do agente: usa pessoas cadastradas no time
+// ============================================================
+// Mapeia o agent_role da etapa para o cargo (PM, Tech Lead, Dev, QA) e
+// devolve a média salário/horas das pessoas com aquele cargo. Fallback:
+// app_settings.human_hourly_cost (o legado, um valor único pro time todo).
+export function mapAgentRoleToPersonRole(agentRole: string | null | undefined): string {
+  if (!agentRole) return "dev";
+  const r = agentRole.toLowerCase();
+  if (r === "pm") return "pm";
+  if (r === "tech_lead" || r === "code_reviewer") return "tech_lead";
+  if (r === "qa") return "qa";
+  // dev_backend / dev_frontend / dev_infra / outros → "dev"
+  return "dev";
+}
+
+export async function getHourlyRateForAgent(
+  projectId: string,
+  agentRole: string | null | undefined
+): Promise<number> {
+  const sb = createServiceClient();
+  const personRole = mapAgentRoleToPersonRole(agentRole);
+  const { data: people } = await sb
+    .from("project_people")
+    .select("monthly_salary, monthly_hours")
+    .eq("project_id", projectId)
+    .eq("role", personRole);
+  const rates: number[] = [];
+  for (const p of people ?? []) {
+    const sal = Number((p as any).monthly_salary ?? 0);
+    const hrs = Number((p as any).monthly_hours ?? 0);
+    if (sal > 0 && hrs > 0) rates.push(sal / hrs);
+  }
+  if (rates.length > 0) {
+    return rates.reduce((a, b) => a + b, 0) / rates.length;
+  }
+  // fallback: rate global do time (legado)
+  const { data: settings } = await sb
+    .from("app_settings")
+    .select("human_hourly_cost")
+    .eq("project_id", projectId)
+    .limit(1)
+    .maybeSingle();
+  return Number(settings?.human_hourly_cost ?? 0);
 }

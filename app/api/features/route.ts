@@ -104,6 +104,8 @@ export async function POST(req: Request) {
         project_id: projectId,
         repository_id: repositoryId,
         environment_id: body.environment_id ?? undefined,
+        working_branch: body.working_branch?.trim() || undefined,
+        source_branch: body.source_branch?.trim() || undefined,
         created_by: user.id,
       });
 

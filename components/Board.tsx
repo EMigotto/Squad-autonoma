@@ -13,6 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { createClient } from "@/lib/supabase/client";
 import Column from "./Column";
+import AssistantFAB from "./AssistantFAB";
 import FeatureCard from "./FeatureCard";
 import CreateFeatureDialog from "./CreateFeatureDialog";
 import CardDetailPanel from "./CardDetailPanel";
@@ -299,6 +300,7 @@ export default function Board({
 
   return (
     <div className="min-h-screen flex flex-col">
+      <AssistantFAB />
       <header className="border-b border-ink-700 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-6">
           <div>
@@ -357,6 +359,14 @@ export default function Board({
         </div>
 
         <div className="flex items-center gap-2">
+          <Link
+            href="/assistant"
+            className="text-xs uppercase tracking-widest text-ink-950 bg-discovery hover:bg-discovery/80 px-3 py-1.5 font-semibold flex items-center gap-1.5"
+            title="chat com o assistente do squad (claude code style)"
+          >
+            <span className="text-base leading-none">◈</span>
+            assistente
+          </Link>
           <Link
             href="/dashboards"
             className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100 px-3 py-1.5"

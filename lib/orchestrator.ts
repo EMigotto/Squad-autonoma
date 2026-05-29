@@ -55,7 +55,9 @@ async function getProjectContextBlock(
   projectId?: string,
   repositoryId?: string,
   environmentId?: string,
-  featureSlug?: string
+  featureSlug?: string,
+  workingBranchOverride?: string | null,
+  sourceBranchOverride?: string | null
 ): Promise<string> {
   if (!projectId) return "";
   const sb = createServiceClient();
@@ -93,10 +95,16 @@ async function getProjectContextBlock(
     envName = env?.name ?? null;
     envBranch = env?.branch ?? null;
   }
+  const repoDefaultBranch =
+    (project.default_base_branch as string | undefined) ?? "main";
+  // Prioridade: override da feature > branch do ambiente > default da app
+  const workingBranch =
+    workingBranchOverride?.trim() || envBranch || repoDefaultBranch;
+  // De qual branch clonar caso a working_branch não exista ainda
   const baseBranch =
-    (project.default_base_branch as string | undefined) ??
-    (envBranch ?? "main");
-  const workingBranch = envBranch ?? baseBranch;
+    sourceBranchOverride?.trim() ||
+    envBranch ||
+    repoDefaultBranch;
   const targetRepo: string | null = project.github_repo ?? null;
 
   // === BLOCO INICIAL (vem ANTES de tudo): alvo da missão ===
@@ -379,7 +387,7 @@ export async function previewKickoff(
     attachments,
     settings
   );
-  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug, feature.working_branch, feature.source_branch);
   const initial_message = projectBlock ? `${projectBlock}\n${baseMsg}` : baseMsg;
 
   return {
@@ -428,7 +436,7 @@ export async function startStage(
   }
 
   // Injeta o contexto do projeto (tipo de app, stack, instruções, conhecimento)
-  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug, feature.working_branch, feature.source_branch);
   if (projectBlock) userMsg = `${projectBlock}\n${userMsg}`;
 
   const session = await beta.sessions.create({
@@ -1522,6 +1530,8 @@ export async function createFeature(input: {
   project_id: string;
   repository_id?: string;
   environment_id?: string;
+  working_branch?: string;
+  source_branch?: string;
   created_by?: string;
 }): Promise<{ feature_id: string; card_id: string }> {
   const sb = createServiceClient();
@@ -1805,7 +1815,7 @@ export async function startNextChunk(cardId: string): Promise<void> {
     attachments,
     settings
   );
-  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug);
+  const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug, feature.working_branch, feature.source_branch);
   const userMsg = projectBlock ? `${projectBlock}\n${baseChunkMsg}` : baseChunkMsg;
 
   const session = await beta.sessions.create({

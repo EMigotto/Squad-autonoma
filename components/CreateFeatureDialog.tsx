@@ -42,6 +42,9 @@ export default function CreateFeatureDialog({
   const [selectedRepoId, setSelectedRepoId] = useState<string>("");
   const [environments, setEnvironments] = useState<any[]>([]);
   const [selectedEnvId, setSelectedEnvId] = useState<string>("");
+  const [branchMode, setBranchMode] = useState<"env" | "new">("env");
+  const [newBranch, setNewBranch] = useState<string>("");
+  const [sourceBranch, setSourceBranch] = useState<string>("");
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>("");
@@ -178,6 +181,14 @@ export default function CreateFeatureDialog({
           ...form,
           repository_id: selectedRepoId || undefined,
           environment_id: selectedEnvId || undefined,
+          working_branch:
+            branchMode === "new" && newBranch.trim()
+              ? newBranch.trim()
+              : undefined,
+          source_branch:
+            branchMode === "new" && sourceBranch.trim()
+              ? sourceBranch.trim()
+              : undefined,
           github_parent_issue:
             parseInt(form.github_parent_issue, 10) || 0,
           attachment_paths: attachmentPaths,
@@ -309,6 +320,67 @@ export default function CreateFeatureDialog({
                     </option>
                   ))}
                 </select>
+              )}
+            </div>
+            <div className="border border-ink-800 bg-ink-900/40 p-2 space-y-2">
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400">
+                branch de trabalho
+              </label>
+              <div className="flex gap-3 text-[11px]">
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="branch-mode"
+                    checked={branchMode === "env"}
+                    onChange={() => setBranchMode("env")}
+                  />
+                  <span>usar a branch do ambiente</span>
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="branch-mode"
+                    checked={branchMode === "new"}
+                    onChange={() => {
+                      setBranchMode("new");
+                      const envBr = environments.find((e: any) => e.id === selectedEnvId)?.branch;
+                      if (!sourceBranch && envBr) setSourceBranch(envBr);
+                    }}
+                  />
+                  <span>criar branch nova</span>
+                </label>
+              </div>
+              {branchMode === "new" && (
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div>
+                    <label className="block text-[9px] uppercase tracking-widest text-ink-500 mb-1">
+                      nova branch (working)
+                    </label>
+                    <input
+                      type="text"
+                      value={newBranch}
+                      onChange={(e) => setNewBranch(e.target.value)}
+                      placeholder="ex: feature/inventario-c3"
+                      className="w-full bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono focus:border-discovery focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] uppercase tracking-widest text-ink-500 mb-1">
+                      raiz (clonar a partir de)
+                    </label>
+                    <input
+                      type="text"
+                      value={sourceBranch}
+                      onChange={(e) => setSourceBranch(e.target.value)}
+                      placeholder="ex: develop, main"
+                      className="w-full bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono focus:border-discovery focus:outline-none"
+                    />
+                  </div>
+                  <div className="col-span-2 text-[10px] text-ink-500 leading-relaxed">
+                    Se a branch nova não existir, será criada a partir da raiz informada.
+                    Os agentes commitam tudo nela.
+                  </div>
+                </div>
               )}
             </div>
             {field(

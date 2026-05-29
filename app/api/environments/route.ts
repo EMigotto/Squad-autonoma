@@ -17,7 +17,7 @@ export async function GET(req: Request) {
   if (repositoryId) {
     const { data } = await svc
       .from("environments")
-      .select("id, name, branch, is_default, sort_order, repository_id")
+      .select("id, name, branch, is_default, sort_order, repository_id, promotes_to_id")
       .eq("repository_id", repositoryId)
       .order("sort_order", { ascending: true });
     return NextResponse.json({ environments: data ?? [] });
@@ -27,7 +27,7 @@ export async function GET(req: Request) {
   if (!projectId) return NextResponse.json({ environments: [] });
   const { data } = await svc
     .from("environments")
-    .select("id, name, branch, is_default, sort_order, repository_id")
+    .select("id, name, branch, is_default, sort_order, repository_id, promotes_to_id")
     .eq("project_id", projectId)
     .order("sort_order", { ascending: true });
   return NextResponse.json({ environments: data ?? [] });
