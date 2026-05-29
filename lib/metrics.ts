@@ -91,20 +91,47 @@ export async function recomputeCardMetrics(cardId: string): Promise<void> {
     .eq("card_id", cardId)
     .maybeSingle();
 
-  const inputTokens = Number(existing?.input_tokens ?? 0);
-  const outputTokens = Number(existing?.output_tokens ?? 0);
+  // --- SOMA DOS RUNS DE ETAPA (fonte de verdade pro custo) ---
+  const { data: runs } = await sb
+    .from("card_stage_runs")
+    .select("input_tokens, output_tokens, token_cost, human_hours, human_cost, total_cost")
+    .eq("card_id", cardId);
+  let sIn = 0,
+    sOut = 0,
+    sTokenCost = 0,
+    sHours = 0,
+    sHumanCost = 0,
+    sTotal = 0;
+  for (const r of runs ?? []) {
+    sIn += Number((r as any).input_tokens ?? 0);
+    sOut += Number((r as any).output_tokens ?? 0);
+    sTokenCost += Number((r as any).token_cost ?? 0);
+    sHours += Number((r as any).human_hours ?? 0);
+    sHumanCost += Number((r as any).human_cost ?? 0);
+    sTotal += Number((r as any).total_cost ?? 0);
+  }
+  const hasRunData =
+    sIn > 0 || sOut > 0 || sTokenCost > 0 || sHumanCost > 0 || sTotal > 0 || sHours > 0;
 
-  // human_hours: usa o valor informado, senão estima 0.25h por gate decidido
-  const humanHours =
-    existing?.human_hours != null
-      ? Number(existing.human_hours)
-      : +(gatesTotal * 0.25).toFixed(2);
+  // Tokens: prefere o que foi acumulado nos runs; senão usa o legado em card_metrics
+  const inputTokens = hasRunData ? sIn : Number(existing?.input_tokens ?? 0);
+  const outputTokens = hasRunData ? sOut : Number(existing?.output_tokens ?? 0);
 
-  // --- 4. custo ---
-  const tokenCost =
+  // human_hours: se temos runs, soma das durações; senão usa o valor manual; senão estima
+  const humanHours = hasRunData
+    ? +sHours.toFixed(2)
+    : existing?.human_hours != null
+    ? Number(existing.human_hours)
+    : +(gatesTotal * 0.25).toFixed(2);
+
+  // --- 4. custo (sempre soma dos runs quando houver, com fallback legado) ---
+  const tokenCostLegacy =
     (inputTokens / 1_000_000) * inMtok + (outputTokens / 1_000_000) * outMtok;
-  const humanCost = humanHours * hourly;
-  const totalCost = tokenCost + humanCost;
+  const humanCostLegacy = humanHours * hourly;
+
+  const tokenCost = hasRunData ? +sTokenCost.toFixed(4) : +tokenCostLegacy.toFixed(4);
+  const humanCost = hasRunData ? +sHumanCost.toFixed(2) : +humanCostLegacy.toFixed(2);
+  const totalCost = hasRunData ? +sTotal.toFixed(2) : +(tokenCostLegacy + humanCostLegacy).toFixed(2);
 
   await sb.from("card_metrics").upsert(
     {
@@ -122,10 +149,10 @@ export async function recomputeCardMetrics(cardId: string): Promise<void> {
       test_coverage_pct: existing?.test_coverage_pct ?? null,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
-      token_cost: +tokenCost.toFixed(4),
+      token_cost: tokenCost,
       human_hours: humanHours,
-      human_cost: +humanCost.toFixed(2),
-      total_cost: +totalCost.toFixed(2),
+      human_cost: humanCost,
+      total_cost: totalCost,
       iso_week: isoWeek(completedAt ?? startedAt),
       updated_at: new Date().toISOString(),
     },
@@ -184,10 +211,9 @@ export async function captureSessionUsage(
   sessionId: string,
   sessionUsage: { input_tokens?: number; output_tokens?: number } | null | undefined
 ): Promise<void> {
-  if (!sessionUsage) return;
-  const inTok = Number(sessionUsage.input_tokens ?? 0);
-  const outTok = Number(sessionUsage.output_tokens ?? 0);
-  if (inTok === 0 && outTok === 0) return;
+  const inTok = Number(sessionUsage?.input_tokens ?? 0);
+  const outTok = Number(sessionUsage?.output_tokens ?? 0);
+  // Mesmo sem usage, ainda vamos computar o custo HUMANO da etapa pela duração.
 
   const sb = createServiceClient();
   // localiza o stage_run pela session_id (último daquele card)

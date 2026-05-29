@@ -1183,11 +1183,21 @@ function MetricsPanel({
         : `${metrics.gates_rejected} rejeição(ões)`
       : "—";
 
+  const humanCost = Number(metrics.human_cost ?? 0);
+  const tokenCost = Number(metrics.token_cost ?? 0);
+  const totalCost = Number(metrics.total_cost ?? humanCost + tokenCost);
+  const moneyFmt = (n: number) =>
+    new Intl.NumberFormat("pt-BR", { style: "currency", currency: currency || "BRL" }).format(n);
   const tiles = [
     { label: "Cycle time", value: fmtCycleH(metrics.cycle_time_hours), tone: "text-development", sub: metrics.is_done ? "concluído" : "em andamento" },
     { label: "Aprovação", value: metrics.gates_total > 0 ? (metrics.first_pass ? "✓" : "✗") : "—", tone: metrics.gates_total > 0 && metrics.first_pass ? "text-qa" : "text-discovery", sub: approval },
     { label: "Cobertura", value: metrics.test_coverage_pct != null ? `${Number(metrics.test_coverage_pct).toFixed(0)}%` : "—", tone: metrics.test_coverage_pct != null && Number(metrics.test_coverage_pct) >= 80 ? "text-qa" : "text-ink-300", sub: "meta ≥ 80%" },
-    { label: "Custo", value: Number(metrics.total_cost) > 0 ? `${currency} ${Number(metrics.total_cost).toFixed(0)}` : "—", tone: "text-planning", sub: `${Number(metrics.human_hours ?? 0).toFixed(2)}h humanas` },
+    {
+      label: "Custo",
+      value: moneyFmt(totalCost),
+      tone: "text-planning",
+      sub: `${moneyFmt(humanCost)} humano + ${moneyFmt(tokenCost)} tokens · ${Number(metrics.human_hours ?? 0).toFixed(2)}h`,
+    },
   ];
 
   return (

@@ -14,6 +14,9 @@ interface PreviewData {
   agent_name?: string;
   agent_id?: string;
   model?: string;
+  target_branch?: string;
+  source_branch?: string;
+  target_repo?: string | null;
   message?: string;
   error?: string;
 }
@@ -252,6 +255,24 @@ export default function TransitionDialog({
                     <Stat label="agente" value={preview.agent_name ?? "?"} />
                     <Stat label="modelo" value={preview.model ?? "?"} />
                     <Stat label="agent id" value={agentIdDisplay} mono />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <Stat
+                      label="branch alvo (working)"
+                      value={preview.target_branch ?? "?"}
+                      mono
+                    />
+                    <Stat
+                      label="branch raiz (clonar de)"
+                      value={preview.source_branch ?? "?"}
+                      mono
+                    />
+                  </div>
+                  <div className="text-[10px] text-ink-500 -mt-1">
+                    Os agentes vão escrever <strong>somente</strong> em{" "}
+                    <span className="font-mono text-ink-300">{preview.target_branch}</span>{" "}
+                    — se a branch não existir, é criada a partir de{" "}
+                    <span className="font-mono text-ink-300">{preview.source_branch}</span>.
                   </div>
 
                   <div className="border border-planning/40 bg-planning/5 p-2 text-[11px] text-planning">

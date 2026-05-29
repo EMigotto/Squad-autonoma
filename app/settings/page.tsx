@@ -340,14 +340,38 @@ export default function SettingsPage() {
 
           <details className="mt-3 text-[11px]">
             <summary className="cursor-pointer text-ink-300 hover:text-ink-100">
-              tabela automática de preços (USD por 1M tokens) · clique pra ver
+              tabela automática de preços por 1M tokens · convertido ao câmbio acima · clique pra ver
             </summary>
-            <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-ink-400">
-              <div><span className="text-ink-200">Opus 4.7 / 4.6</span> · $5 in · $25 out</div>
-              <div><span className="text-ink-200">Sonnet 4.6</span> · $3 in · $15 out</div>
-              <div><span className="text-ink-200">Haiku 4.5</span> · $1 in · $5 out</div>
-              <div className="text-ink-500">Opus 4.1 (legado) · $15 / $75</div>
-            </div>
+            {(() => {
+              const rate = Number(settings.usd_to_brl ?? 5.0);
+              const fmt = (usd: number) =>
+                new Intl.NumberFormat("pt-BR", {
+                  style: "currency",
+                  currency: settings.metrics_currency ?? "BRL",
+                }).format(usd * rate);
+              return (
+                <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-ink-400">
+                  <div>
+                    <span className="text-ink-200">Opus 4.7 / 4.6</span> ·{" "}
+                    {fmt(5)} in · {fmt(25)} out
+                  </div>
+                  <div>
+                    <span className="text-ink-200">Sonnet 4.6</span> · {fmt(3)} in ·{" "}
+                    {fmt(15)} out
+                  </div>
+                  <div>
+                    <span className="text-ink-200">Haiku 4.5</span> · {fmt(1)} in ·{" "}
+                    {fmt(5)} out
+                  </div>
+                  <div className="text-ink-500">
+                    Opus 4.1 (legado) · {fmt(15)} / {fmt(75)}
+                  </div>
+                  <div className="col-span-2 text-[10px] text-ink-500 mt-1">
+                    base USD: $5/$25 (Opus), $3/$15 (Sonnet), $1/$5 (Haiku) · câmbio aplicado: {rate.toFixed(2)}
+                  </div>
+                </div>
+              );
+            })()}
             <div className="text-ink-500 mt-2">
               Override manual: se preencher os campos abaixo, eles substituem a
               tabela automática (em R$/Mtok). Útil para contratos negociados.

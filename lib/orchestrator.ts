@@ -356,6 +356,9 @@ export async function previewKickoff(
   agent_name: string;
   agent_id: string;
   model: string;
+  target_branch: string;
+  source_branch: string;
+  target_repo: string | null;
 }> {
   const sb = createServiceClient();
 
@@ -390,11 +393,44 @@ export async function previewKickoff(
   const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug, feature.working_branch, feature.source_branch);
   const initial_message = projectBlock ? `${projectBlock}\n${baseMsg}` : baseMsg;
 
+  // Resolve a branch alvo (mesma prioridade da diretiva injetada)
+  let envBranch: string | null = null;
+  if (feature.environment_id) {
+    const { data: env } = await sb
+      .from("environments")
+      .select("branch")
+      .eq("id", feature.environment_id)
+      .maybeSingle();
+    envBranch = env?.branch ?? null;
+  }
+  let repoDefault: string | null = null;
+  if (feature.repository_id) {
+    const { data: r } = await sb
+      .from("project_repositories")
+      .select("default_base_branch, github_repo")
+      .eq("id", feature.repository_id)
+      .maybeSingle();
+    repoDefault = r?.default_base_branch ?? null;
+  }
+  const targetBranch =
+    feature.working_branch?.trim() ||
+    envBranch ||
+    repoDefault ||
+    "main";
+  const sourceBranch =
+    feature.source_branch?.trim() ||
+    envBranch ||
+    repoDefault ||
+    "main";
+
   return {
     initial_message,
     agent_name: def.name,
     agent_id: deployed.claude_agent_id,
     model: def.model,
+    target_branch: targetBranch,
+    source_branch: sourceBranch,
+    target_repo: feature.github_repo,
   };
 }
 
@@ -1421,12 +1457,10 @@ export async function forceSyncSession(cardId: string): Promise<{
     };
   }
 
-  // Captura uso/custo da sessão encerrada (best-effort)
+  // Captura uso/custo da sessão encerrada (best-effort, inclusive custo humano)
   try {
     const usage = (session as any)?.usage ?? null;
-    if (usage) {
-      await captureSessionUsage(cardId, card.claude_session_id, usage);
-    }
+    await captureSessionUsage(cardId, card.claude_session_id, usage);
   } catch (e) {
     console.error("[forceSync] captureSessionUsage falhou", e);
   }

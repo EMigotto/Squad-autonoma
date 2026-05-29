@@ -360,14 +360,6 @@ export default function Board({
 
         <div className="flex items-center gap-2">
           <Link
-            href="/assistant"
-            className="text-xs uppercase tracking-widest text-ink-950 bg-discovery hover:bg-discovery/80 px-3 py-1.5 font-semibold flex items-center gap-1.5"
-            title="chat com o assistente do squad (claude code style)"
-          >
-            <span className="text-base leading-none">◈</span>
-            assistente
-          </Link>
-          <Link
             href="/dashboards"
             className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100 px-3 py-1.5"
           >
