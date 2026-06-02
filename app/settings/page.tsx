@@ -1124,14 +1124,42 @@ function DreamingSection() {
   }
 
   const pending = learnings.filter((l) => !l.applied_at);
+  const applied = learnings.filter((l) => l.applied_at);
+  const fromRejections = pending.filter((l) => l.kind === "pitfall");
+  const manual = pending.filter((l) => l.kind !== "pitfall");
 
   return (
     <section>
       <h2 className="text-sm uppercase tracking-widest text-ink-400 mb-4">// dreaming (evolução contínua)</h2>
-      <div className="text-xs text-ink-400 mb-4 leading-relaxed">
-        Aprendizados acumulados do projeto (decisões, padrões, armadilhas). O
-        “Dreaming” consolida esses aprendizados no arquivo de instruções, fazendo
-        os agentes ficarem mais inteligentes a cada ciclo.
+
+      {/* COMO FUNCIONA */}
+      <div className="border border-planning/30 bg-planning/5 p-3 mb-4 text-xs leading-relaxed text-ink-200">
+        <div className="font-mono text-planning mb-1 uppercase tracking-widest text-[10px]">como o dreaming aprende</div>
+        <div className="grid grid-cols-3 gap-3 mt-2">
+          <div>
+            <div className="font-mono text-ink-100 text-[11px] mb-1">1 · coleta</div>
+            O time acumula aprendizados de duas fontes: <strong>automática</strong> — todo gate
+            <strong> reprovado</strong> vira um aprendizado com o motivo que você escreveu — e
+            <strong> manual</strong>, quando você registra um insight abaixo.
+          </div>
+          <div>
+            <div className="font-mono text-ink-100 text-[11px] mb-1">2 · consolidação</div>
+            Ao rodar o Dreaming, um agente lê o arquivo de instruções (<code>CLAUDE.md</code>),
+            <strong> integra</strong> os aprendizados pendentes (novas convenções, armadilhas a evitar,
+            arquitetura esclarecida) e abre um <strong>PR</strong> <code>chore/dreaming-update</code>.
+          </div>
+          <div>
+            <div className="font-mono text-ink-100 text-[11px] mb-1">3 · efeito</div>
+            O <code>CLAUDE.md</code> é injetado no contexto de <strong>toda</strong> sessão de agente.
+            Consolidado lá, o aprendizado passa a guiar PM, Tech Lead, Devs e QA nas próximas features —
+            o mesmo erro tende a não se repetir.
+          </div>
+        </div>
+        <div className="mt-2 text-ink-400 text-[11px]">
+          O que muda ao longo do tempo: o <strong>arquivo de instruções</strong> do projeto (versionado no Git,
+          com um CHANGELOG no rodapé a cada passe) e, por consequência, o <strong>comportamento dos agentes</strong>.
+          Para ver exatamente o que mudou, abra o PR <code>chore/dreaming-update</code> no GitHub.
+        </div>
       </div>
 
       <div className="flex gap-2 mb-4">
@@ -1139,26 +1167,58 @@ function DreamingSection() {
           placeholder="registrar um aprendizado (ex: 'sempre validar CPF na camada de domínio')"
           className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none" />
         <button onClick={addLearning} className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300">+ registrar</button>
-        <button onClick={dream} disabled={dreaming}
+        <button onClick={dream} disabled={dreaming || pending.length === 0}
+          title={pending.length === 0 ? "nada pendente para consolidar" : ""}
           className="bg-planning text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-planning/80 disabled:opacity-50">
-          {dreaming ? "sonhando…" : "💭 consolidar (dreaming)"}
+          {dreaming ? "sonhando…" : `💭 consolidar (${pending.length})`}
         </button>
       </div>
       {msg && <div className="text-[11px] text-ink-300 mb-3 font-mono">{msg}</div>}
 
-      {learnings.length === 0 ? (
-        <div className="text-xs text-ink-400 italic">nenhum aprendizado ainda. Registre acima ou deixe o Dreaming inferir do repositório.</div>
+      {/* PENDENTES agrupados por origem */}
+      {pending.length === 0 ? (
+        <div className="text-xs text-ink-400 italic mb-3">nenhum aprendizado pendente. Reprovações de gate aparecem aqui automaticamente; ou registre um insight acima.</div>
       ) : (
-        <div className="space-y-1">
-          <div className="text-[11px] text-ink-400">{pending.length} pendente(s) de consolidação</div>
-          {learnings.map((l) => (
-            <div key={l.id} className={`border px-3 py-2 text-sm ${l.applied_at ? "border-ink-800 text-ink-400" : "border-ink-700 text-ink-100"}`}>
-              <span className="text-[9px] uppercase border border-ink-600 px-1 py-0.5 mr-2">{l.kind}</span>
-              {l.content}
-              {l.applied_at && <span className="text-[10px] text-qa ml-2">✓ consolidado</span>}
+        <div className="space-y-3 mb-4">
+          {fromRejections.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-amber-300/80 mb-1 font-mono">⤳ de reprovações de gate ({fromRejections.length})</div>
+              <div className="space-y-1">
+                {fromRejections.map((l) => (
+                  <div key={l.id} className="border border-planning/40 bg-planning/5 px-3 py-2 text-sm text-ink-100">{l.content}</div>
+                ))}
+              </div>
             </div>
-          ))}
+          )}
+          {manual.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1 font-mono">✎ registrados manualmente ({manual.length})</div>
+              <div className="space-y-1">
+                {manual.map((l) => (
+                  <div key={l.id} className="border border-ink-700 px-3 py-2 text-sm text-ink-100">
+                    <span className="text-[9px] uppercase border border-ink-600 px-1 py-0.5 mr-2">{l.kind}</span>{l.content}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {/* JÁ CONSOLIDADOS */}
+      {applied.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-ink-400 hover:text-ink-100">{applied.length} já consolidado(s) no CLAUDE.md · ver histórico</summary>
+          <div className="space-y-1 mt-2">
+            {applied.map((l) => (
+              <div key={l.id} className="border border-ink-800 px-3 py-2 text-sm text-ink-400">
+                <span className="text-[9px] uppercase border border-ink-700 px-1 py-0.5 mr-2">{l.kind}</span>
+                {l.content}
+                <span className="text-[10px] text-qa ml-2">✓ {new Date(l.applied_at).toLocaleDateString("pt-BR")}</span>
+              </div>
+            ))}
+          </div>
+        </details>
       )}
     </section>
   );

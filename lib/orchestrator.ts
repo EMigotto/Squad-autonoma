@@ -624,6 +624,42 @@ export async function onboardProject(projectId: string): Promise<{ session_id: s
 }
 
 /**
+ * Captura automática de aprendizado: quando um gate é REPROVADO, o motivo
+ * informado pelo humano vira um learning do time (kind 'pitfall'), atrelado à
+ * etapa em que ocorreu. O Dreaming depois consolida tudo nas instruções, então
+ * o mesmo erro tende a não se repetir.
+ */
+async function captureGateLearning(
+  cardId: string,
+  stage: string,
+  reason?: string
+): Promise<void> {
+  if (!reason || !reason.trim()) return;
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("feature:features(project_id, slug)")
+    .eq("id", cardId)
+    .single();
+  const projectId = (card as any)?.feature?.project_id;
+  const slug = (card as any)?.feature?.slug;
+  if (!projectId) return;
+  const stageLabel: Record<string, string> = {
+    discovery: "Discovery (PM)",
+    planning: "Planejamento (Tech Lead)",
+    development: "Desenvolvimento (Dev)",
+    code_review: "Code Review",
+    qa: "QA",
+  };
+  const where = stageLabel[stage] ?? stage;
+  await sb.from("project_learnings").insert({
+    project_id: projectId,
+    kind: "pitfall",
+    content: `Reprovado em ${where}${slug ? ` (feature ${slug})` : ""}: ${reason.trim()}`,
+  });
+}
+
+/**
  * "Dreaming": consolida os aprendizados acumulados do projeto no arquivo de
  * instruções, mantendo-o vivo conforme o time evolui.
  */
@@ -1090,6 +1126,13 @@ export async function advanceCard(
     .eq("status", "running");
 
   if (decision === "rejected") {
+    // Aprendizado automático: o motivo da reprovação vira um learning do time,
+    // que o Dreaming vai consolidar nas instruções dos agentes.
+    try {
+      await captureGateLearning(cardId, card.stage as string, reason);
+    } catch (e) {
+      console.error("[advanceCard] captureGateLearning falhou", e);
+    }
     // MESMO CARD, MESMO STAGE — só dispara nova sessão
     await sb
       .from("cards")
