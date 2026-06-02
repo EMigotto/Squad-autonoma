@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getActiveProjectId } from "@/lib/projects";
+import { provisionTeamAgents } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
+export const maxDuration = 120;
 
 export async function GET() {
   const sb = createClient();
@@ -93,7 +95,18 @@ export async function POST(req: Request) {
       .from("app_settings")
       .insert({ project_id: project.id, default_base_branch: "main" });
 
-    return NextResponse.json({ project });
+    // Dispara a criação dos agentes DESTE time (com o sufixo da sigla no nome).
+    // Best-effort: se falhar, o time é criado mesmo assim e o usuário pode
+    // rodar /admin/setup depois.
+    let agents_provisioned = false;
+    try {
+      await provisionTeamAgents(project.id);
+      agents_provisioned = true;
+    } catch (e) {
+      console.error("[projects] provisionTeamAgents falhou", e);
+    }
+
+    return NextResponse.json({ project, agents_provisioned });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },

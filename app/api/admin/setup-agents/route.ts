@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { beta } from "@/lib/claude";
-import { BUILTIN_AGENTS, buildClaudeSpec, hashPrompt } from "@/lib/agents";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getActiveProjectId } from "@/lib/projects";
+import { provisionTeamAgents } from "@/lib/orchestrator";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -50,97 +49,9 @@ export async function POST(req: Request) {
     }
 
     const allResults: any[] = [];
-
     for (const pid of projectIds) {
-      // 1. SEED: builtin agents no projeto (se ainda não existem)
-      for (const a of BUILTIN_AGENTS) {
-        await svc.from("agent_definitions").upsert(
-          {
-            project_id: pid,
-            role: a.role,
-            name: a.name,
-            stage: a.stage,
-            model: a.model,
-            system_prompt: a.system_prompt,
-            sort_order: a.sort_order,
-            enabled: true,
-            is_builtin: true,
-            description: a.description,
-          },
-          { onConflict: "project_id,role", ignoreDuplicates: true }
-        );
-      }
-
-      // 2. DEPLOY de cada definition do projeto
-      const { data: definitions } = await svc
-        .from("agent_definitions")
-        .select("*")
-        .eq("project_id", pid)
-        .eq("enabled", true);
-
-      for (const def of definitions ?? []) {
-        try {
-          const spec = buildClaudeSpec({
-            name: def.name,
-            model: def.model,
-            system_prompt: def.system_prompt,
-          });
-          const promptHash = hashPrompt(def.system_prompt);
-
-          const { data: existing } = await svc
-            .from("agents")
-            .select("claude_agent_id, system_prompt_hash, claude_agent_version")
-            .eq("project_id", pid)
-            .eq("role", def.role)
-            .eq("is_current", true)
-            .maybeSingle();
-
-          if (!existing) {
-            const agent = await beta.agents.create(spec);
-            await svc.from("agents").insert({
-              project_id: pid,
-              role: def.role,
-              claude_agent_id: agent.id,
-              claude_agent_version: agent.version ?? 1,
-              system_prompt_hash: promptHash,
-            });
-            allResults.push({ project: pid, role: def.role, action: "created" });
-            continue;
-          }
-
-          if (existing.system_prompt_hash === promptHash) {
-            allResults.push({ project: pid, role: def.role, action: "no-op" });
-            continue;
-          }
-
-          const agent = await beta.agents.update(existing.claude_agent_id, {
-            ...spec,
-            version: existing.claude_agent_version,
-          });
-          await svc
-            .from("agents")
-            .update({ is_current: false })
-            .eq("project_id", pid)
-            .eq("role", def.role);
-          await svc.from("agents").insert({
-            project_id: pid,
-            role: def.role,
-            claude_agent_id: agent.id,
-            claude_agent_version: agent.version,
-            system_prompt_hash: promptHash,
-          });
-          allResults.push({ project: pid, role: def.role, action: "updated" });
-        } catch (roleErr) {
-          const msg =
-            roleErr instanceof Error ? roleErr.message : String(roleErr);
-          allResults.push({
-            project: pid,
-            role: def.role,
-            action: "error",
-            error: msg,
-          });
-        }
-      }
+      const { results } = await provisionTeamAgents(pid);
+      for (const r of results) allResults.push({ project: pid, ...r });
     }
 
     return NextResponse.json({ results: allResults });

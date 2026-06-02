@@ -7,6 +7,7 @@ import { captureSessionUsage } from "@/lib/metrics";
  */
 import { beta, anthropic } from "@/lib/claude";
 import { createServiceClient } from "@/lib/supabase/server";
+import { BUILTIN_AGENTS, buildClaudeSpec, hashPrompt } from "@/lib/agents";
 import type { StageCode } from "@/lib/supabase/types";
 
 const NEXT_STAGE: Record<StageCode, StageCode> = {
@@ -509,11 +510,19 @@ export async function startStage(
     model: def.model,
   });
 
+  const stageLabelMap: Record<string, string> = {
+    discovery: "Discovery",
+    planning: "Planejamento",
+    development: "Desenvolvimento",
+    code_review: "Code Review",
+    qa: "QA",
+  };
+  const stageLabel = stageLabelMap[stage] ?? stage;
   await sb.from("card_chat_messages").insert({
     card_id: cardId,
     session_id: session.id,
     role: "system",
-    content: userMsg,
+    content: `▶ Etapa "${stageLabel}" iniciada — ${def.name} (${def.model}). A sessão está rodando; os eventos e o resumo aparecem aqui conforme o agente trabalha.`,
   });
 
   return session.id;
@@ -621,6 +630,109 @@ export async function onboardProject(projectId: string): Promise<{ session_id: s
   const sessionId = await runProjectAgentSession(projectId, `onboarding · ${project.name}`, prompt);
   await sb.from("projects").update({ onboarded_at: new Date().toISOString() }).eq("id", projectId);
   return { session_id: sessionId };
+}
+
+/**
+ * Provisiona os agentes de um TIME (projeto): semeia as definitions builtin e
+ * implanta (cria/atualiza) cada agente na Anthropic, com o SUFIXO do time no
+ * nome para deixar claro a qual time o agente pertence (ex.: "PM Agent [PAD]").
+ * Idempotente: roda no setup e ao criar um time novo.
+ */
+export async function provisionTeamAgents(
+  projectId: string
+): Promise<{ results: Array<{ role: string; action: string }> }> {
+  const sb = createServiceClient();
+  const { data: project } = await sb
+    .from("projects")
+    .select("sigla, name")
+    .eq("id", projectId)
+    .single();
+  const suffix = project?.sigla ? ` [${project.sigla}]` : "";
+  const results: Array<{ role: string; action: string }> = [];
+
+  // 1) semeia definitions builtin (não sobrescreve customizações)
+  for (const a of BUILTIN_AGENTS) {
+    await sb.from("agent_definitions").upsert(
+      {
+        project_id: projectId,
+        role: a.role,
+        name: a.name,
+        stage: a.stage,
+        model: a.model,
+        system_prompt: a.system_prompt,
+        sort_order: a.sort_order,
+        enabled: true,
+        is_builtin: true,
+        description: a.description,
+      },
+      { onConflict: "project_id,role", ignoreDuplicates: true }
+    );
+  }
+
+  // 2) implanta cada definition habilitada, com o sufixo do time no nome
+  const { data: defs } = await sb
+    .from("agent_definitions")
+    .select("*")
+    .eq("project_id", projectId)
+    .eq("enabled", true);
+
+  for (const def of defs ?? []) {
+    try {
+      const spec = buildClaudeSpec({
+        name: `${def.name}${suffix}`,
+        model: def.model,
+        system_prompt: def.system_prompt,
+      });
+      const promptHash = hashPrompt(def.system_prompt);
+      const { data: existing } = await sb
+        .from("agents")
+        .select("claude_agent_id, system_prompt_hash, claude_agent_version")
+        .eq("project_id", projectId)
+        .eq("role", def.role)
+        .eq("is_current", true)
+        .maybeSingle();
+
+      if (!existing) {
+        const agent = await beta.agents.create(spec);
+        await sb.from("agents").insert({
+          project_id: projectId,
+          role: def.role,
+          claude_agent_id: agent.id,
+          claude_agent_version: agent.version ?? 1,
+          system_prompt_hash: promptHash,
+        });
+        results.push({ role: def.role, action: "created" });
+        continue;
+      }
+      if (existing.system_prompt_hash === promptHash) {
+        results.push({ role: def.role, action: "no-op" });
+        continue;
+      }
+      const agent = await beta.agents.update(existing.claude_agent_id, {
+        ...spec,
+        version: existing.claude_agent_version,
+      });
+      await sb
+        .from("agents")
+        .update({ is_current: false })
+        .eq("project_id", projectId)
+        .eq("role", def.role);
+      await sb.from("agents").insert({
+        project_id: projectId,
+        role: def.role,
+        claude_agent_id: agent.id,
+        claude_agent_version: agent.version,
+        system_prompt_hash: promptHash,
+      });
+      results.push({ role: def.role, action: "updated" });
+    } catch (e) {
+      results.push({
+        role: def.role,
+        action: `error: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  }
+  return { results };
 }
 
 /**

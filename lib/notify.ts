@@ -17,6 +17,100 @@ const STAGE_COLOR: Record<string, string> = {
 };
 
 /**
+ * Notifica o Teams que uma etapa AGUARDA revisão humana, com botões
+ * Aprovar / Reprovar que abrem uma página de confirmação no app (sem exigir
+ * bot). Best-effort.
+ */
+export async function notifyAwaitingReview(
+  cardId: string,
+  stage: string
+): Promise<void> {
+  try {
+    const sb = createServiceClient();
+    const { data: card } = await sb
+      .from("cards")
+      .select("id, feature:features(slug, title, project_id)")
+      .eq("id", cardId)
+      .maybeSingle();
+    const feature = (card as any)?.feature;
+    const projectId = feature?.project_id;
+    if (!projectId) return;
+
+    const { data: settings } = await sb
+      .from("app_settings")
+      .select("notification_teams_webhook, teams_command_token")
+      .eq("project_id", projectId)
+      .limit(1)
+      .maybeSingle();
+    const webhook = settings?.notification_teams_webhook?.trim();
+    const token = settings?.teams_command_token?.trim();
+    if (!webhook) return;
+
+    const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+    const label = STAGE_LABEL[stage] ?? stage;
+
+    const actions: any[] = [];
+    if (appUrl && token) {
+      actions.push({
+        type: "Action.OpenUrl",
+        title: "✅ Aprovar e avançar",
+        url: `${appUrl}/teams/act?card=${encodeURIComponent(cardId)}&token=${encodeURIComponent(token)}&do=approve`,
+      });
+      actions.push({
+        type: "Action.OpenUrl",
+        title: "✋ Reprovar / pedir ajuste",
+        url: `${appUrl}/teams/act?card=${encodeURIComponent(cardId)}&token=${encodeURIComponent(token)}&do=reject`,
+      });
+    }
+    if (appUrl) {
+      actions.push({
+        type: "Action.OpenUrl",
+        title: "abrir no board",
+        url: `${appUrl}/?card=${encodeURIComponent(cardId)}`,
+      });
+    }
+
+    const payload = {
+      type: "message",
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: {
+            $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+            type: "AdaptiveCard",
+            version: "1.4",
+            body: [
+              {
+                type: "TextBlock",
+                size: "Medium",
+                weight: "Bolder",
+                wrap: true,
+                color: "Warning",
+                text: `⏸ Aguardando revisão: ${label}`,
+              },
+              {
+                type: "TextBlock",
+                wrap: true,
+                text: `${feature.title} (${feature.slug}) concluiu a etapa de ${label} e aguarda sua aprovação para avançar.`,
+              },
+            ],
+            actions,
+          },
+        },
+      ],
+    };
+
+    await fetch(webhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    console.error("[notify] awaiting-review Teams card failed", e);
+  }
+}
+
+/**
  * Notifica o Teams do time que uma etapa da esteira foi concluída.
  * Best-effort: nunca lança (não pode quebrar o avanço do card).
  */

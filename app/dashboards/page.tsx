@@ -253,8 +253,8 @@ function LineChart({
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 200 }}>
       {grid.map((g, i) => (
         <g key={i}>
-          <line x1={pad} y1={g.y} x2={W - pad} y2={g.y} stroke="#1f2d38" strokeWidth="1" />
-          <text x={pad - 6} y={g.y + 3} textAnchor="end" fontSize="9" fill="#5C7080">
+          <line x1={pad} y1={g.y} x2={W - pad} y2={g.y} stroke="#e4eaef" strokeWidth="1" />
+          <text x={pad - 6} y={g.y + 3} textAnchor="end" fontSize="9" fill="#67757f">
             {g.v}
           </text>
         </g>
@@ -264,10 +264,10 @@ function LineChart({
       {data.map((d, i) => (
         <g key={i}>
           <circle cx={px(i)} cy={scaleY(d.y)} r="3.5" fill={color} />
-          <text x={px(i)} y={scaleY(d.y) - 8} textAnchor="middle" fontSize="9" fill="#9FB8C6">
+          <text x={px(i)} y={scaleY(d.y) - 8} textAnchor="middle" fontSize="9" fill="#67757f">
             {d.y}
           </text>
-          <text x={px(i)} y={H - pad + 14} textAnchor="middle" fontSize="8" fill="#5C7080">
+          <text x={px(i)} y={H - pad + 14} textAnchor="middle" fontSize="8" fill="#67757f">
             {d.x.replace(/^\d{4}-/, "")}
           </text>
         </g>

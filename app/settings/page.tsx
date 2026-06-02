@@ -18,6 +18,8 @@ interface Settings {
   metrics_currency?: string;
   usd_to_brl?: number;
   require_reinforced_review?: boolean;
+  teams_command_token?: string | null;
+  teams_chat_link?: string | null;
   sensitive_paths?: string;
 }
 
@@ -679,6 +681,68 @@ export default function SettingsPage() {
               placeholder="https://hooks.slack.com/services/..."
             />
           </div>
+
+          {/* AGENTE DO TIME NO TEAMS */}
+          <div className="mt-6 border border-development/30 bg-development/5 p-4">
+            <div className="text-xs uppercase tracking-widest text-development mb-2 font-mono">
+              // agente do time no microsoft teams
+            </div>
+            <div className="text-xs text-ink-400 mb-3 leading-relaxed">
+              Permite criar features, ver status e <strong>aprovar/reprovar etapas pelo Teams</strong>.
+              O token autentica os comandos vindos do Teams; os botões Aprovar/Reprovar das
+              notificações usam ele. Mantenha-o secreto.
+            </div>
+
+            <label className="text-[11px] text-ink-400 block mb-1">token de comando do time</label>
+            <div className="flex gap-2 mb-3">
+              <input
+                readOnly
+                value={settings.teams_command_token ?? ""}
+                placeholder="(nenhum — gere um token)"
+                className="flex-1 bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm font-mono text-ink-300"
+              />
+              <button
+                onClick={() => {
+                  const t =
+                    (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)) +
+                    Math.random().toString(36).slice(2);
+                  update("teams_command_token", t.replace(/-/g, ""));
+                }}
+                className="bg-ink-100 text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-ink-300 whitespace-nowrap"
+              >
+                gerar token
+              </button>
+            </div>
+
+            <SimpleField
+              label="link do chat do time no Teams (deep link)"
+              value={settings.teams_chat_link ?? ""}
+              onChange={(v) => update("teams_chat_link", v || null)}
+              placeholder="https://teams.microsoft.com/l/channel/..."
+            />
+            {settings.teams_chat_link && (
+              <a
+                href={settings.teams_chat_link}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block mt-2 bg-development text-ink-950 px-3 py-1.5 text-xs font-semibold hover:bg-development/80"
+              >
+                ⧉ abrir chat do time no Teams
+              </a>
+            )}
+
+            <details className="mt-3 text-[11px] text-ink-400">
+              <summary className="cursor-pointer hover:text-ink-100">como ligar os comandos no Teams (passo a passo)</summary>
+              <div className="mt-2 leading-relaxed space-y-1">
+                <p>1. No canal do time → ⋯ → <strong>Workflows</strong> → modelo "Post to a channel when a webhook request is received" e cole a URL no campo de webhook acima (recebe as notificações).</p>
+                <p>2. Para <strong>criar feature / aprovar pelo Teams</strong>: crie um fluxo no Power Automate com gatilho de mensagem (ou um comando) que faça um <strong>HTTP POST</strong> para <code>{`{APP_URL}`}/api/teams/command</code> com corpo <code>{`{ token, action, ... }`}</code> usando o token acima.</p>
+                <p>• criar: <code>{`{ "token":"…", "action":"create_feature", "title":"…", "description":"…" }`}</code></p>
+                <p>• aprovar: <code>{`{ "token":"…", "action":"approve", "card_id":"…" }`}</code></p>
+                <p>• status: <code>{`{ "token":"…", "action":"status" }`}</code></p>
+                <p>Os botões Aprovar/Reprovar que chegam no Teams já funcionam assim que o token e o NEXT_PUBLIC_APP_URL estiverem configurados.</p>
+              </div>
+            </details>
+          </div>
         </section>
         </>
         )}
@@ -1182,7 +1246,7 @@ function DreamingSection() {
         <div className="space-y-3 mb-4">
           {fromRejections.length > 0 && (
             <div>
-              <div className="text-[10px] uppercase tracking-widest text-amber-300/80 mb-1 font-mono">⤳ de reprovações de gate ({fromRejections.length})</div>
+              <div className="text-[10px] uppercase tracking-widest text-planning mb-1 font-mono">⤳ de reprovações de gate ({fromRejections.length})</div>
               <div className="space-y-1">
                 {fromRejections.map((l) => (
                   <div key={l.id} className="border border-planning/40 bg-planning/5 px-3 py-2 text-sm text-ink-100">{l.content}</div>

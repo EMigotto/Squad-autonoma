@@ -66,6 +66,8 @@ export async function PUT(req: Request) {
     "usd_to_brl",
     "require_reinforced_review",
     "sensitive_paths",
+    "teams_command_token",
+    "teams_chat_link",
   ];
   const patch: Record<string, unknown> = {};
   for (const k of allowed) {

@@ -156,6 +156,24 @@ async function handleSessionIdled(sessionId: string) {
         summary,
         artifacts_json: [],
       });
+      // evento de feedback no chat: etapa concluída, aguardando humano
+      const lbl: Record<string, string> = {
+        discovery: "Discovery", planning: "Planejamento",
+        development: "Desenvolvimento", code_review: "Code Review", qa: "QA",
+      };
+      await sb.from("card_chat_messages").insert({
+        card_id: card.id,
+        session_id: sessionId,
+        role: "system",
+        content: `⏸ Etapa "${lbl[card.stage] ?? card.stage}" concluída — aguardando sua revisão. Você pode aprovar para avançar, ou pedir um ajuste aqui no chat e regerar esta etapa.`,
+      });
+      // avisa o Teams do time com botões Aprovar/Reprovar
+      try {
+        const { notifyAwaitingReview } = await import("@/lib/notify");
+        await notifyAwaitingReview(card.id, card.stage);
+      } catch (e) {
+        console.error("[webhook] notifyAwaitingReview falhou", e);
+      }
     } else {
       // Atualiza o summary do gate existente com a resposta mais recente
       await sb

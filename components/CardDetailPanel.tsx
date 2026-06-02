@@ -718,6 +718,7 @@ export default function CardDetailPanel({
                   modelName={session.agent_name}
                   chatHistory={chatHistory}
                   canSend={canChat}
+                  awaitingReview={isAwaitingReview}
                   onSent={() => {
                     loadChatHistory();
                     loadDetail();
@@ -1928,6 +1929,7 @@ function AgentChat({
   modelName,
   chatHistory,
   canSend = true,
+  awaitingReview = false,
   onSent,
 }: {
   cardId: string;
@@ -1936,6 +1938,7 @@ function AgentChat({
   modelName?: string;
   chatHistory: ChatMessage[];
   canSend?: boolean;
+  awaitingReview?: boolean;
   onSent: () => void;
 }) {
   const [input, setInput] = useState("");
@@ -1943,6 +1946,8 @@ function AgentChat({
     { name: string; preview: string; media_type: string; data: string }[]
   >([]);
   const [sending, setSending] = useState(false);
+  const [regenMode, setRegenMode] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [model, setModel] = useState<string | null>(null);
   const [agentName, setAgentName] = useState<string | null>(modelName ?? null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -2025,9 +2030,35 @@ function AgentChat({
     }
   }
 
-  const visibleMessages = chatHistory.filter(
-    (m) => m.role !== "system" || chatHistory.length < 3
-  );
+  async function regenerate() {
+    if (!input.trim() || regenerating) return;
+    if (
+      !confirm(
+        "Isso vai REGERAR esta etapa: a tentativa atual é rejeitada e o agente roda de novo aplicando o ajuste que você escreveu. Continuar?"
+      )
+    )
+      return;
+    setRegenerating(true);
+    try {
+      const res = await fetch(`/api/cards/${cardId}/harness`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: input }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert("erro: " + (j.error ?? res.status));
+      } else {
+        setInput("");
+        setRegenMode(false);
+        onSent();
+      }
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  const visibleMessages = chatHistory;
 
   return (
     <section className="flex-1 flex flex-col min-h-0">
@@ -2114,47 +2145,87 @@ function AgentChat({
         {/* Input */}
         {canSend ? (
         <div className="border-t border-ink-800 p-2 shrink-0">
+          {awaitingReview && (
+            <div className="flex gap-1 mb-2 text-[10px] font-mono">
+              <button
+                onClick={() => setRegenMode(false)}
+                className={`px-2 py-1 border ${!regenMode ? "border-ink-100 text-ink-100" : "border-ink-700 text-ink-400"}`}
+              >
+                conversar com o agente
+              </button>
+              <button
+                onClick={() => setRegenMode(true)}
+                className={`px-2 py-1 border ${regenMode ? "border-planning text-planning" : "border-ink-700 text-ink-400"}`}
+              >
+                🔄 regerar etapa com ajuste
+              </button>
+            </div>
+          )}
+          {regenMode && (
+            <div className="text-[10px] text-planning/90 mb-1 leading-snug">
+              o que você escrever entra como correção: a tentativa atual é rejeitada e
+              {agentName ? ` o ${agentName}` : " o agente"} roda esta etapa de novo aplicando o ajuste.
+            </div>
+          )}
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="mensagem para o agente... (ctrl+enter envia)"
+            placeholder={
+              regenMode
+                ? "ex: você não considerou a etapa de assinatura digital no fluxo — inclua o serviço de carimbo do tempo e o ADR correspondente."
+                : "mensagem para o agente... (ctrl+enter envia)"
+            }
             rows={2}
-            disabled={sending || busy}
+            disabled={sending || busy || regenerating}
             className="w-full bg-transparent text-sm text-ink-100 px-1 py-1 focus:outline-none resize-none disabled:opacity-50"
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
-                send();
+                regenMode ? regenerate() : send();
               }
             }}
           />
           <div className="flex items-center gap-2 mt-1">
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={handleImageSelect}
-              className="hidden"
-            />
-            <button
-              onClick={() => fileRef.current?.click()}
-              disabled={sending || busy}
-              title="anexar imagem"
-              className="text-ink-400 hover:text-ink-100 text-sm px-1.5 py-1 border border-ink-700 hover:border-ink-500 disabled:opacity-50"
-            >
-              📎 imagem
-            </button>
+            {!regenMode && (
+              <>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleImageSelect}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={sending || busy}
+                  title="anexar imagem"
+                  className="text-ink-400 hover:text-ink-100 text-sm px-1.5 py-1 border border-ink-700 hover:border-ink-500 disabled:opacity-50"
+                >
+                  📎 imagem
+                </button>
+              </>
+            )}
             <span className="text-[10px] text-ink-500">
               {model ? `rodando em ${model}` : ""}
             </span>
-            <button
-              onClick={send}
-              disabled={sending || busy || (!input.trim() && images.length === 0)}
-              className="ml-auto bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300 disabled:opacity-50"
-            >
-              {sending ? "enviando…" : busy ? "agente ocupado" : "enviar"}
-            </button>
+            {regenMode ? (
+              <button
+                onClick={regenerate}
+                disabled={regenerating || !input.trim()}
+                className="ml-auto bg-planning text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-planning/80 disabled:opacity-50"
+              >
+                {regenerating ? "regerando…" : "🔄 regerar etapa"}
+              </button>
+            ) : (
+              <button
+                onClick={send}
+                disabled={sending || busy || (!input.trim() && images.length === 0)}
+                className="ml-auto bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300 disabled:opacity-50"
+              >
+                {sending ? "enviando…" : busy ? "agente ocupado" : "enviar"}
+              </button>
+            )}
           </div>
         </div>
         ) : (
