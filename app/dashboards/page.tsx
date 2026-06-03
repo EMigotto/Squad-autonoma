@@ -59,6 +59,33 @@ export default function DashboardsPage() {
     setLoading(false);
   }, [scope, teamId, projectId]);
 
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState("");
+  async function backfillLoc() {
+    if (backfilling) return;
+    setBackfilling(true);
+    setBackfillMsg("medindo linhas de código no GitHub… pode levar um pouco.");
+    const qs = new URLSearchParams({ scope });
+    if (scope === "team" && teamId) qs.set("team_id", teamId);
+    if (scope === "project" && projectId) qs.set("project_id", projectId);
+    try {
+      const res = await fetch(`/api/dashboard/backfill-loc?${qs.toString()}`, { method: "POST" });
+      const j = await res.json();
+      if (res.ok) {
+        setBackfillMsg(
+          `pronto: ${j.updated} de ${j.candidates} feature(s) medidas (${j.total_loc_measured.toLocaleString("pt-BR")} LOC). Atualizando…`
+        );
+        await load();
+      } else {
+        setBackfillMsg(`erro: ${j.error ?? res.status}`);
+      }
+    } catch (e) {
+      setBackfillMsg("erro ao recalcular: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
   useEffect(() => {
     load();
   }, [load]);
@@ -180,6 +207,23 @@ export default function DashboardsPage() {
             </div>
             <div className="text-[11px] text-ink-400">
               {summary.done_cards} de {summary.total_cards} cards concluídos nesta visão
+            </div>
+
+            {/* Recalcular LOC do histórico (popular ROI retroativo) */}
+            <div className="mt-3 flex items-center gap-3 flex-wrap">
+              <button
+                onClick={backfillLoc}
+                disabled={backfilling}
+                className="bg-qa text-ink-950 px-3 py-1.5 text-xs font-semibold hover:bg-qa/80 disabled:opacity-50"
+              >
+                {backfilling ? "recalculando…" : "↻ recalcular LOC do histórico (ROI retroativo)"}
+              </button>
+              {backfillMsg && <span className="text-[11px] text-ink-400">{backfillMsg}</span>}
+              {(!roi || roi.features_considered === 0) && !backfillMsg && (
+                <span className="text-[11px] text-ink-400">
+                  a seção de ROI aparece após medir as linhas de código das features concluídas — clique para medir o histórico.
+                </span>
+              )}
             </div>
 
             {/* ROI / ECONOMIA */}

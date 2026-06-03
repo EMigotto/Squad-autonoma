@@ -440,16 +440,45 @@ export async function estimateFeatureLoc(featureId: string): Promise<number | nu
 
   const base = feature.source_branch || "main";
   const head = feature.working_branch;
-  if (base === head) return null;
 
-  const res = await fetch(
-    `https://api.github.com/repos/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
-    { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } }
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
-  const files = Array.isArray(data?.files) ? data.files : [];
-  // additions = código produzido; é a métrica mais alinhada a "esforço de dev"
-  const additions = files.reduce((s: number, f: any) => s + (f.additions ?? 0), 0);
-  return additions || null;
+  // 1) tenta o compare base...working (funciona enquanto a branch existe)
+  if (base !== head) {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const files = Array.isArray(data?.files) ? data.files : [];
+      const additions = files.reduce((s: number, f: any) => s + (f.additions ?? 0), 0);
+      if (additions > 0) return additions;
+    }
+  }
+
+  // 2) fallback (feature já mergeada / branch removida): soma additions dos
+  // PRs cujo head é a branch de trabalho.
+  try {
+    const owner = repo.split("/")[0];
+    const listRes = await fetch(
+      `https://api.github.com/repos/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${head}`)}&per_page=20`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } }
+    );
+    if (listRes.ok) {
+      const prs = await listRes.json();
+      let total = 0;
+      for (const pr of Array.isArray(prs) ? prs : []) {
+        const det = await fetch(`https://api.github.com/repos/${repo}/pulls/${pr.number}`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+        });
+        if (det.ok) {
+          const d = await det.json();
+          total += d?.additions ?? 0;
+        }
+      }
+      if (total > 0) return total;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
