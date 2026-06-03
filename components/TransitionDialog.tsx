@@ -8,6 +8,13 @@ interface Props {
   onConfirm: () => void;
 }
 
+const MODEL_OPTIONS = [
+  { id: "claude-opus-4-7", label: "Opus 4.7 — máximo" },
+  { id: "claude-opus-4-6", label: "Opus 4.6" },
+  { id: "claude-sonnet-4-6", label: "Sonnet 4.6 — equilíbrio" },
+  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5 — rápido/barato" },
+];
+
 interface PreviewData {
   target_stage: string;
   initial_message?: string;
@@ -27,6 +34,7 @@ export default function TransitionDialog({
   onConfirm,
 }: Props) {
   const [preview, setPreview] = useState<PreviewData | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [editedMessage, setEditedMessage] = useState<string>("");
   const [confirming, setConfirming] = useState(false);
@@ -85,6 +93,7 @@ export default function TransitionDialog({
         if (data.initial_message) {
           setEditedMessage(data.initial_message);
         }
+        if (data.model) setSelectedModel(data.model);
         setLoading(false);
         // Se vamos pra QA, busca os PRs abertos pra oferecer merge
         if (data.target_stage === "qa") {
@@ -176,6 +185,7 @@ export default function TransitionDialog({
           dispatch: true,
           gate_decision: "approved",
           gate_reason: "aprovado via diálogo de transição (sem gate prévio)",
+          model: selectedModel || undefined,
         }),
       });
       if (res.ok) {
@@ -193,6 +203,7 @@ export default function TransitionDialog({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         decision: "approved",
+        model: selectedModel || undefined,
         override_initial_message:
           editedMessage !== preview?.initial_message ? editedMessage : undefined,
       }),
@@ -253,7 +264,30 @@ export default function TransitionDialog({
                 <>
                   <div className="grid grid-cols-3 gap-3 text-xs">
                     <Stat label="agente" value={preview.agent_name ?? "?"} />
-                    <Stat label="modelo" value={preview.model ?? "?"} />
+                    <div className="border border-ink-700 p-2">
+                      <div className="text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+                        modelo (escolha p/ esta execução)
+                      </div>
+                      <select
+                        value={selectedModel}
+                        onChange={(e) => setSelectedModel(e.target.value)}
+                        className="w-full bg-ink-900 border border-ink-700 px-2 py-1 text-xs font-mono focus:border-development focus:outline-none"
+                      >
+                        {MODEL_OPTIONS.some((m) => m.id === selectedModel) ? null : (
+                          <option value={selectedModel}>{selectedModel || "(padrão do agente)"}</option>
+                        )}
+                        {MODEL_OPTIONS.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </select>
+                      {preview.model && selectedModel !== preview.model && (
+                        <div className="text-[9px] text-development mt-1">
+                          alterado · padrão: {preview.model}
+                        </div>
+                      )}
+                    </div>
                     <Stat label="agent id" value={agentIdDisplay} mono />
                   </div>
                   <div className="grid grid-cols-2 gap-3 text-xs">

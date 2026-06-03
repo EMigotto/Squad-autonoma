@@ -197,7 +197,7 @@ async function getProjectContextBlock(
   block += `Application type: ${isExisting ? "EXISTING / legacy codebase" : "NEW / greenfield"}\n`;
   if (project.app_kind) block += `Kind: ${project.app_kind}\n`;
   if (project.tech_stack) block += `Tech stack: ${project.tech_stack}\n`;
-  const instr = project.instructions_path || "CLAUDE.md";
+  const instr = project.instructions_path || "AGENTS.md";
   block += `Instructions file: ${instr}\n`;
   block +=
     `Documentation language: ALL artifacts you create (PRD, ADR, acceptance ` +
@@ -292,6 +292,64 @@ async function getAgentForStage(stage: string, projectId: string) {
     );
 
   return { def, deployed };
+}
+
+/**
+ * Resolve o agente IMPLANTADO a ser usado para um modelo específico. Se o
+ * humano escolheu um modelo diferente do default do agente no diálogo de
+ * transição, procuramos (ou implantamos sob demanda) uma variante daquele
+ * papel naquele modelo. Sem override, devolve o agente atual (default).
+ */
+async function resolveDeployedAgent(
+  projectId: string,
+  def: any,
+  currentDeployed: any,
+  modelOverride?: string | null
+): Promise<any> {
+  const model = (modelOverride ?? "").trim();
+  // sem override ou igual ao default -> usa o agente atual
+  if (!model || model === def.model) return currentDeployed;
+
+  const sb = createServiceClient();
+  // já existe uma variante implantada pra esse modelo?
+  const { data: existing } = await sb
+    .from("agents")
+    .select("*")
+    .eq("project_id", projectId)
+    .eq("role", def.role)
+    .eq("model", model)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existing) return existing;
+
+  // implanta sob demanda uma variante do agente nesse modelo
+  const { data: project } = await sb
+    .from("projects")
+    .select("sigla")
+    .eq("id", projectId)
+    .maybeSingle();
+  const suffix = project?.sigla ? ` [${project.sigla}]` : "";
+  const spec = buildClaudeSpec({
+    name: `${def.name}${suffix} · ${model}`,
+    model,
+    system_prompt: def.system_prompt,
+  });
+  const agent = await beta.agents.create(spec);
+  const { data: inserted } = await sb
+    .from("agents")
+    .insert({
+      project_id: projectId,
+      role: def.role,
+      claude_agent_id: agent.id,
+      claude_agent_version: agent.version ?? 1,
+      model,
+      is_current: false,
+      system_prompt_hash: hashPrompt(def.system_prompt),
+    })
+    .select("*")
+    .single();
+  return inserted ?? currentDeployed;
 }
 
 async function ensureFeatureEnvironment(featureId: string) {
@@ -441,7 +499,8 @@ export async function previewKickoff(
 export async function startStage(
   cardId: string,
   initialMessage?: string,
-  prependContext?: string
+  prependContext?: string,
+  modelOverride?: string | null
 ): Promise<string> {
   const sb = createServiceClient();
 
@@ -455,7 +514,14 @@ export async function startStage(
   const stage = card.stage as StageCode;
 
   const feature = await ensureFeatureEnvironment(card.feature_id);
-  const { def, deployed } = await getAgentForStage(stage, feature.project_id);
+  const { def, deployed: currentDeployed } = await getAgentForStage(stage, feature.project_id);
+  const deployed = await resolveDeployedAgent(
+    feature.project_id,
+    def,
+    currentDeployed,
+    modelOverride
+  );
+  const effectiveModel = (modelOverride && modelOverride.trim()) || def.model;
   const attachments = await fetchAttachmentContents(card.feature_id);
   const settings = await getAppSettings(feature.project_id);
 
@@ -507,7 +573,7 @@ export async function startStage(
     agent_role: def.role,
     claude_session_id: session.id,
     status: "running",
-    model: def.model,
+    model: effectiveModel,
   });
 
   const stageLabelMap: Record<string, string> = {
@@ -522,7 +588,7 @@ export async function startStage(
     card_id: cardId,
     session_id: session.id,
     role: "system",
-    content: `▶ Etapa "${stageLabel}" iniciada — ${def.name} (${def.model}). A sessão está rodando; os eventos e o resumo aparecem aqui conforme o agente trabalha.`,
+    content: `▶ Etapa "${stageLabel}" iniciada — ${def.name} (${effectiveModel}). A sessão está rodando; os eventos e o resumo aparecem aqui conforme o agente trabalha.`,
   });
 
   return session.id;
@@ -602,7 +668,7 @@ export async function onboardProject(projectId: string): Promise<{ session_id: s
   const { data: project } = await sb.from("projects").select("*").eq("id", projectId).single();
   if (!project) throw new Error("projeto não encontrado");
   const token = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
-  const instr = project.instructions_path || "CLAUDE.md";
+  const instr = project.instructions_path || "AGENTS.md";
   const base = project.default_base_branch || "main";
 
   const prompt =
@@ -780,7 +846,7 @@ export async function dreamProject(projectId: string): Promise<{ session_id: str
   const { data: project } = await sb.from("projects").select("*").eq("id", projectId).single();
   if (!project) throw new Error("projeto não encontrado");
   const token = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
-  const instr = project.instructions_path || "CLAUDE.md";
+  const instr = project.instructions_path || "AGENTS.md";
   const base = project.default_base_branch || "main";
 
   const { data: learnings } = await sb
@@ -1196,7 +1262,8 @@ export async function advanceCard(
   decision: "approved" | "rejected",
   reason?: string,
   decidedBy?: string,
-  overrideInitialMessage?: string
+  overrideInitialMessage?: string,
+  modelOverride?: string | null
 ): Promise<void> {
   if (decision === "rejected" && !reason) {
     throw new Error("rejection requires a reason");
@@ -1260,7 +1327,7 @@ export async function advanceCard(
       `Address this feedback specifically. Reuse the task context below.\n` +
       `--- end rejection feedback ---`;
 
-    await startStage(cardId, undefined, rejectionContext);
+    await startStage(cardId, undefined, rejectionContext, modelOverride);
     return;
   }
 
@@ -1299,7 +1366,7 @@ export async function advanceCard(
   if (nextStage === "development") {
     await startDevelopmentStage(cardId);
   } else {
-    await startStage(cardId, overrideInitialMessage);
+    await startStage(cardId, overrideInitialMessage, undefined, modelOverride);
   }
 }
 
@@ -1420,7 +1487,8 @@ export async function moveCardToStage(
   targetStage: StageCode,
   dispatch: boolean = true,
   gateDecision: "approved" | "rejected" = "rejected",
-  gateReason?: string
+  gateReason?: string,
+  modelOverride?: string | null
 ): Promise<void> {
   const sb = createServiceClient();
   const { data: card } = await sb
@@ -1491,7 +1559,7 @@ export async function moveCardToStage(
     if (targetStage === "development") {
       await startDevelopmentStage(cardId);
     } else {
-      await startStage(cardId);
+      await startStage(cardId, undefined, undefined, modelOverride);
     }
   }
 }

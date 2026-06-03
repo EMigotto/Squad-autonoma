@@ -29,7 +29,8 @@ export async function POST(
       targetStage,
       dispatch,
       body.gate_decision === "approved" ? "approved" : "rejected",
-      body.gate_reason
+      body.gate_reason,
+      body.model
     );
     return NextResponse.json({ status: "moved", stage: targetStage });
   } catch (e) {

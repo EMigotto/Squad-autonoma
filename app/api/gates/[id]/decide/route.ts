@@ -41,7 +41,8 @@ export async function POST(
       body.decision,
       body.reason,
       user.id,
-      body.override_initial_message
+      body.override_initial_message,
+      body.model
     );
 
     // Atualiza os indicadores do card (best-effort)
