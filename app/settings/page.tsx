@@ -1208,13 +1208,13 @@ function DreamingSection() {
           </div>
           <div>
             <div className="font-mono text-ink-100 text-[11px] mb-1">2 · consolidação</div>
-            Ao rodar o Dreaming, um agente lê o arquivo de instruções (<code>CLAUDE.md</code>),
+            Ao rodar o Dreaming, um agente lê o arquivo de instruções (<code>AGENTS.md</code>),
             <strong> integra</strong> os aprendizados pendentes (novas convenções, armadilhas a evitar,
             arquitetura esclarecida) e abre um <strong>PR</strong> <code>chore/dreaming-update</code>.
           </div>
           <div>
             <div className="font-mono text-ink-100 text-[11px] mb-1">3 · efeito</div>
-            O <code>CLAUDE.md</code> é injetado no contexto de <strong>toda</strong> sessão de agente.
+            O <code>AGENTS.md</code> é injetado no contexto de <strong>toda</strong> sessão de agente.
             Consolidado lá, o aprendizado passa a guiar PM, Tech Lead, Devs e QA nas próximas features —
             o mesmo erro tende a não se repetir.
           </div>
@@ -1272,7 +1272,7 @@ function DreamingSection() {
       {/* JÁ CONSOLIDADOS */}
       {applied.length > 0 && (
         <details className="text-xs">
-          <summary className="cursor-pointer text-ink-400 hover:text-ink-100">{applied.length} já consolidado(s) no CLAUDE.md · ver histórico</summary>
+          <summary className="cursor-pointer text-ink-400 hover:text-ink-100">{applied.length} já consolidado(s) no AGENTS.md · ver histórico</summary>
           <div className="space-y-1 mt-2">
             {applied.map((l) => (
               <div key={l.id} className="border border-ink-800 px-3 py-2 text-sm text-ink-400">
@@ -1301,7 +1301,7 @@ function ProjectsSection({ configuringId }: { configuringId?: boolean }) {
     app_type: "new",
     app_kind: "app",
     tech_stack: "",
-    instructions_path: "CLAUDE.md",
+    instructions_path: "AGENTS.md",
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -1445,7 +1445,7 @@ function ProjectsSection({ configuringId }: { configuringId?: boolean }) {
                 label="arquivo de instruções"
                 value={form.instructions_path}
                 onChange={(v) => setForm({ ...form, instructions_path: v })}
-                placeholder="CLAUDE.md"
+                placeholder="AGENTS.md"
               />
             </div>
             {form.app_type === "existing" ? (
@@ -1534,7 +1534,7 @@ function ReposManager() {
   const [newDeps, setNewDeps] = useState("");
   const [newAppType, setNewAppType] = useState("new");
   const [newStack, setNewStack] = useState("");
-  const [newInstr, setNewInstr] = useState("CLAUDE.md");
+  const [newInstr, setNewInstr] = useState("AGENTS.md");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
 
@@ -1562,7 +1562,7 @@ function ReposManager() {
         depends_on: newDeps.trim(),
         app_type: newAppType,
         tech_stack: newStack.trim(),
-        instructions_path: newInstr.trim() || "CLAUDE.md",
+        instructions_path: newInstr.trim() || "AGENTS.md",
       }),
     });
     const data = await res.json();
@@ -1724,7 +1724,7 @@ function ReposManager() {
             type="text"
             value={newInstr}
             onChange={(e) => setNewInstr(e.target.value)}
-            placeholder="CLAUDE.md"
+            placeholder="AGENTS.md"
             className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
           />
         </div>

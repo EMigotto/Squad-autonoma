@@ -40,16 +40,17 @@ body {
 
 /* Focus ring — sharp, no rounded blur */
 *:focus-visible {
-  outline: 1px solid #fbbf24;
+  outline: 1px solid #00AEEF;
   outline-offset: 2px;
 }
 
-/* Cards: subtle grain background for texture */
+/* Cards: superfície clara com leve profundidade (tema Cielo) */
 .card-surface {
   background: linear-gradient(
     180deg,
-    rgba(255, 255, 255, 0.02) 0%,
-    rgba(255, 255, 255, 0) 100%
+    rgba(10, 39, 51, 0.015) 0%,
+    rgba(10, 39, 51, 0) 100%
   );
-  background-color: #141414;
+  background-color: #ffffff;
+  border-color: #e4eaef;
 }

@@ -12,22 +12,28 @@ const config: Config = {
         mono: ["var(--font-mono)", "ui-monospace", "monospace"],
       },
       colors: {
+        // Tema CLARO (Cielo). A escala é invertida em relação ao tema dark
+        // anterior: 950 = fundo branco ... 100 = texto navy. Assim as classes
+        // existentes (bg-ink-950, text-ink-100, border-ink-800, ...) passam a
+        // render­izar claro sem precisar editar componente por componente.
         ink: {
-          950: "#0a0a0a",
-          900: "#141414",
-          800: "#1f1f1f",
-          700: "#2a2a2a",
-          600: "#3a3a3a",
-          400: "#737373",
-          300: "#a3a3a3",
-          100: "#fafafa",
+          950: "#ffffff", // fundo da página
+          900: "#f3f6f9", // superfícies / cards
+          800: "#e4eaef", // bordas sutis / hover
+          700: "#cfd8e0", // bordas / inputs
+          600: "#aeb9c4", // borda forte / divisores
+          500: "#8a97a3", // texto bem suave
+          400: "#67757f", // texto suave (legível no branco)
+          300: "#4a5862", // texto secundário
+          200: "#27343d", // texto secundário forte
+          100: "#0a2733", // texto principal (navy Cielo)
         },
-        // stage accents — each column gets one
-        discovery: "#c084fc",
-        planning: "#fbbf24",
-        development: "#60a5fa",
-        qa: "#4ade80",
-        done: "#737373",
+        // acentos por etapa — ajustados pra contraste em fundo claro
+        discovery: "#7c3aed",   // roxo
+        planning: "#b8730b",    // âmbar
+        development: "#0086b8", // azul Cielo
+        qa: "#1a8a4a",          // verde
+        done: "#64748b",        // slate
       },
     },
   },
