@@ -84,5 +84,68 @@ export async function GET(req: Request) {
       first_pass_rate: w.gatesTot ? +((w.gatesOk / w.gatesTot) * 100).toFixed(0) : 0,
     }));
 
-  return NextResponse.json({ summary, weekly });
+  // ---- ROI / baseline humano ----
+  // Carrega parâmetros por projeto (LOC/dia, horas/dia, custo dev) com defaults.
+  const { data: settingsRows } = await svc
+    .from("app_settings")
+    .select(
+      "project_id, baseline_loc_per_dev_day, baseline_hours_per_day, baseline_dev_hourly, human_hourly_cost"
+    );
+  const settingsByProject: Record<string, any> = {};
+  for (const s of settingsRows ?? []) settingsByProject[s.project_id] = s;
+
+  const roiByWeek: Record<string, number> = {};
+  let baselineCostTotal = 0;
+  let actualCostTotal = 0;
+  let baselineDaysTotal = 0;
+  let cycleDaysTotal = 0;
+  let roiFeatures = 0;
+  let locTotal = 0;
+
+  for (const m of done) {
+    const loc = Number(m.loc_estimate ?? 0);
+    if (!loc || loc <= 0) continue;
+    const cfg = settingsByProject[m.project_id] ?? {};
+    const locPerDay = Number(cfg.baseline_loc_per_dev_day) || 50;
+    const hoursPerDay = Number(cfg.baseline_hours_per_day) || 6;
+    const devHourly =
+      Number(cfg.baseline_dev_hourly) > 0
+        ? Number(cfg.baseline_dev_hourly)
+        : Number(cfg.human_hourly_cost) || 120;
+
+    const baselineDays = loc / locPerDay;
+    const baselineHours = baselineDays * hoursPerDay;
+    const baselineCost = baselineHours * devHourly;
+    const actualCost = Number(m.total_cost) || 0;
+    const cycleDays = Number(m.cycle_time_hours) / 24;
+
+    baselineCostTotal += baselineCost;
+    actualCostTotal += actualCost;
+    baselineDaysTotal += baselineDays;
+    cycleDaysTotal += cycleDays > 0 ? cycleDays : 0;
+    locTotal += loc;
+    roiFeatures++;
+
+    const wk = m.iso_week;
+    if (wk) roiByWeek[wk] = (roiByWeek[wk] ?? 0) + (baselineCost - actualCost);
+  }
+
+  const roi = {
+    features_considered: roiFeatures,
+    loc_total: locTotal,
+    baseline_cost_total: +baselineCostTotal.toFixed(2),
+    actual_cost_total: +actualCostTotal.toFixed(2),
+    savings_money: +(baselineCostTotal - actualCostTotal).toFixed(2),
+    savings_pct: baselineCostTotal > 0
+      ? +(((baselineCostTotal - actualCostTotal) / baselineCostTotal) * 100).toFixed(0)
+      : 0,
+    baseline_days_total: +baselineDaysTotal.toFixed(1),
+    cycle_days_total: +cycleDaysTotal.toFixed(1),
+    days_saved: +(baselineDaysTotal - cycleDaysTotal).toFixed(1),
+  };
+  const roiWeekly = Object.entries(roiByWeek)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([week, saving]) => ({ week, saving: +saving.toFixed(2) }));
+
+  return NextResponse.json({ summary, weekly, roi, roiWeekly });
 }

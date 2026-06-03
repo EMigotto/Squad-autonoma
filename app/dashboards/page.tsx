@@ -28,6 +28,8 @@ export default function DashboardsPage() {
   const [projectId, setProjectId] = useState<string>("");
   const [summary, setSummary] = useState<Summary | null>(null);
   const [weekly, setWeekly] = useState<Weekly[]>([]);
+  const [roi, setRoi] = useState<any | null>(null);
+  const [roiWeekly, setRoiWeekly] = useState<{ week: string; saving: number }[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -52,6 +54,8 @@ export default function DashboardsPage() {
     const data = await res.json();
     setSummary(data.summary);
     setWeekly(data.weekly ?? []);
+    setRoi(data.roi ?? null);
+    setRoiWeekly(data.roiWeekly ?? []);
     setLoading(false);
   }, [scope, teamId, projectId]);
 
@@ -177,6 +181,37 @@ export default function DashboardsPage() {
             <div className="text-[11px] text-ink-400">
               {summary.done_cards} de {summary.total_cards} cards concluídos nesta visão
             </div>
+
+            {/* ROI / ECONOMIA */}
+            {roi && roi.features_considered > 0 && (
+              <div className="mt-6 mb-8 border border-qa/30 bg-qa/5 p-4">
+                <div className="text-xs uppercase tracking-widest text-qa mb-3 font-mono">
+                  // roi &amp; economia vs. desenvolvimento humano
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                  <Kpi label="Dias economizados" value={`${roi.days_saved}`} unit="dias" tone="text-development" />
+                  <Kpi label="Economia (saving)" value={`R$ ${roi.savings_money.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} unit="" tone="text-qa" />
+                  <Kpi label="Baseline humano" value={`R$ ${roi.baseline_cost_total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`} unit="" tone="text-planning" />
+                  <Kpi label="Custo do squad" value={`R$ ${roi.actual_cost_total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`} unit="" tone="text-discovery" />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="text-xs text-ink-300 leading-relaxed">
+                    Considerando <strong>{roi.features_considered}</strong> feature(s) concluída(s) com{" "}
+                    <strong>{roi.loc_total.toLocaleString("pt-BR")}</strong> linhas de código, um time humano
+                    levaria <strong>~{roi.baseline_days_total} dias-dev</strong>; o squad entregou em{" "}
+                    <strong>~{roi.cycle_days_total} dias</strong> de cycle time — saving de{" "}
+                    <strong className="text-qa">{roi.savings_pct}%</strong> no custo.
+                    <div className="mt-2 text-[10px] text-ink-500">
+                      Premissas configuráveis em Settings → custos → "ROI · baseline humano" (LOC/dev-dia,
+                      horas/dia, custo/hora). Baseline = LOC ÷ produtividade; dias-dev são úteis, cycle time é calendário.
+                    </div>
+                  </div>
+                  <ChartCard title="Saving por semana (R$)">
+                    <LineChart data={roiWeekly.map((w) => ({ x: w.week, y: w.saving }))} color="#1a8a4a" prefix="R$ " />
+                  </ChartCard>
+                </div>
+              </div>
+            )}
 
             {/* EVOLUÇÃO SEMANAL */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

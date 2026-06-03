@@ -20,6 +20,9 @@ interface Settings {
   require_reinforced_review?: boolean;
   teams_command_token?: string | null;
   teams_chat_link?: string | null;
+  baseline_loc_per_dev_day?: number | null;
+  baseline_hours_per_day?: number | null;
+  baseline_dev_hourly?: number | null;
   sensitive_paths?: string;
 }
 
@@ -399,6 +402,56 @@ export default function SettingsPage() {
               </div>
             </div>
           </details>
+
+          {/* ROI / BASELINE HUMANO */}
+          <div className="mt-6 border border-discovery/30 bg-discovery/5 p-4">
+            <div className="text-xs uppercase tracking-widest text-discovery mb-2 font-mono">
+              // roi · baseline de desenvolvimento humano
+            </div>
+            <div className="text-xs text-ink-400 mb-3 leading-relaxed">
+              Parâmetros para estimar quanto a <strong>mesma feature</strong> custaria/demoraria
+              num desenvolvimento humano tradicional (sem agentes), usando linhas de código como
+              referência de mercado. O dashboard compara isso com o real do squad e mostra o saving.
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] text-ink-400 block mb-1">LOC por dev / dia</label>
+                <input
+                  type="number"
+                  value={settings.baseline_loc_per_dev_day ?? 50}
+                  onChange={(e) => update("baseline_loc_per_dev_day", Number(e.target.value) as any)}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+                />
+                <div className="text-[9px] text-ink-500 mt-1">ref. de mercado p/ código pronto+testado (conservador: ~50)</div>
+              </div>
+              <div>
+                <label className="text-[11px] text-ink-400 block mb-1">horas efetivas / dia</label>
+                <input
+                  type="number"
+                  value={settings.baseline_hours_per_day ?? 6}
+                  onChange={(e) => update("baseline_hours_per_day", Number(e.target.value) as any)}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-ink-400 block mb-1">custo dev humano / hora (R$)</label>
+                <input
+                  type="number"
+                  value={settings.baseline_dev_hourly ?? 0}
+                  onChange={(e) => update("baseline_dev_hourly", Number(e.target.value) as any)}
+                  className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+                />
+                <div className="text-[9px] text-ink-500 mt-1">0 = usa o "custo humano / hora" acima</div>
+              </div>
+            </div>
+            <button
+              onClick={saveSettings}
+              className="mt-3 bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300"
+            >
+              salvar parâmetros de ROI
+            </button>
+          </div>
+
           <button
             onClick={saveSettings}
             className="mt-4 bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300"

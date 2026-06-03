@@ -87,7 +87,7 @@ export async function recomputeCardMetrics(cardId: string): Promise<void> {
   // --- preserva campos manuais/captados já existentes ---
   const { data: existing } = await sb
     .from("card_metrics")
-    .select("test_coverage_pct, human_hours, input_tokens, output_tokens")
+    .select("test_coverage_pct, human_hours, input_tokens, output_tokens, loc_estimate")
     .eq("card_id", cardId)
     .maybeSingle();
 
@@ -133,6 +133,17 @@ export async function recomputeCardMetrics(cardId: string): Promise<void> {
   const humanCost = hasRunData ? +sHumanCost.toFixed(2) : +humanCostLegacy.toFixed(2);
   const totalCost = hasRunData ? +sTotal.toFixed(2) : +(tokenCostLegacy + humanCostLegacy).toFixed(2);
 
+  // --- LOC da feature (referência de mercado p/ baseline humano) ---
+  // Mede uma vez, na conclusão, via GitHub compare (base...working).
+  let locEstimate: number | null = existing?.loc_estimate ?? null;
+  if (isDone && locEstimate == null && feature?.id) {
+    try {
+      locEstimate = await estimateFeatureLoc(feature.id);
+    } catch {
+      locEstimate = null;
+    }
+  }
+
   await sb.from("card_metrics").upsert(
     {
       card_id: cardId,
@@ -153,6 +164,7 @@ export async function recomputeCardMetrics(cardId: string): Promise<void> {
       human_hours: humanHours,
       human_cost: humanCost,
       total_cost: totalCost,
+      loc_estimate: locEstimate,
       iso_week: isoWeek(completedAt ?? startedAt),
       updated_at: new Date().toISOString(),
     },
@@ -397,4 +409,47 @@ export async function getHourlyRateForAgent(
     .limit(1)
     .maybeSingle();
   return Number(settings?.human_hourly_cost ?? 0);
+}
+
+/**
+ * Estima as linhas de código produzidas por uma feature, comparando a branch
+ * de trabalho com a branch raiz no GitHub (additions do compare). Usado como
+ * referência de mercado para o baseline humano. Best-effort: 0 se falhar.
+ */
+export async function estimateFeatureLoc(featureId: string): Promise<number | null> {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return null;
+  const sb = createServiceClient();
+  const { data: feature } = await sb
+    .from("features")
+    .select("working_branch, source_branch, repository_id")
+    .eq("id", featureId)
+    .maybeSingle();
+  if (!feature?.working_branch) return null;
+
+  let repo = "";
+  if (feature.repository_id) {
+    const { data: r } = await sb
+      .from("project_repositories")
+      .select("github_repo")
+      .eq("id", feature.repository_id)
+      .maybeSingle();
+    repo = r?.github_repo ?? "";
+  }
+  if (!repo) return null;
+
+  const base = feature.source_branch || "main";
+  const head = feature.working_branch;
+  if (base === head) return null;
+
+  const res = await fetch(
+    `https://api.github.com/repos/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+    { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" } }
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  const files = Array.isArray(data?.files) ? data.files : [];
+  // additions = código produzido; é a métrica mais alinhada a "esforço de dev"
+  const additions = files.reduce((s: number, f: any) => s + (f.additions ?? 0), 0);
+  return additions || null;
 }

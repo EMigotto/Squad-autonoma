@@ -68,6 +68,9 @@ export async function PUT(req: Request) {
     "sensitive_paths",
     "teams_command_token",
     "teams_chat_link",
+    "baseline_loc_per_dev_day",
+    "baseline_hours_per_day",
+    "baseline_dev_hourly",
   ];
   const patch: Record<string, unknown> = {};
   for (const k of allowed) {
