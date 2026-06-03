@@ -63,7 +63,7 @@ async function handleSessionIdled(sessionId: string) {
     // Persiste o resumo do chunk no chat history pra visibilidade
     try {
       const session = await beta.sessions.retrieve(sessionId);
-      const summary = extractSummary(session);
+      const summary = (await buildWorklog(sessionId)) || extractSummary(session);
       const { data: chunkCard } = await sb
         .from("cards")
         .select("id")
@@ -105,7 +105,7 @@ async function handleSessionIdled(sessionId: string) {
     console.error("[webhook] failed to retrieve session", e);
   }
 
-  const summary = extractSummary(session);
+  const summary = (await buildWorklog(sessionId)) || extractSummary(session);
 
   // Persiste a resposta do agente no chat history (pra ele aparecer no chat ao vivo)
   if (summary) {
@@ -193,6 +193,53 @@ function roleForStage(stage: string): string {
       qa: "qa",
     }[stage] ?? "admin"
   );
+}
+
+// Monta um worklog legível a partir dos eventos reais da sessão: o que o
+// agente fez (ferramentas usadas, arquivos tocados, comandos) + o desfecho.
+async function buildWorklog(sessionId: string): Promise<string | null> {
+  try {
+    const toolCounts: Record<string, number> = {};
+    const files = new Set<string>();
+    let lastText = "";
+    let n = 0;
+    for await (const ev of beta.sessions.events.list(sessionId)) {
+      n++;
+      if (n > 600) break;
+      const t = (ev as any).type as string;
+      if (t === "agent.tool_use" || t === "agent.custom_tool_use" || t === "agent.mcp_tool_use") {
+        const name = ((ev as any).name as string) || "tool";
+        toolCounts[name] = (toolCounts[name] ?? 0) + 1;
+        const inp = (ev as any).input ?? (ev as any).arguments ?? {};
+        const fp = inp?.path || inp?.file_path || inp?.filename;
+        if (typeof fp === "string") files.add(fp.split("/").slice(-1)[0]);
+      } else if (t === "agent.message") {
+        const c = (ev as any).content;
+        if (typeof c === "string") lastText = c;
+        else if (Array.isArray(c)) {
+          const txt = c.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+          if (txt.trim()) lastText = txt;
+        }
+      }
+    }
+    const toolLine = Object.keys(toolCounts).length
+      ? "ações: " +
+        Object.entries(toolCounts)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${k}×${v}`)
+          .join(", ")
+      : "";
+    const fileLine = files.size
+      ? `arquivos: ${[...files].slice(0, 8).join(", ")}${files.size > 8 ? "…" : ""}`
+      : "";
+    const head = [toolLine, fileLine].filter(Boolean).join(" · ");
+    const summary = (lastText || "").trim();
+    if (!head && !summary) return null;
+    return [head ? `✓ ${head}` : "✓ concluído", summary].filter(Boolean).join("\n\n");
+  } catch (e) {
+    console.error("[webhook] buildWorklog falhou", e);
+    return null;
+  }
 }
 
 function extractSummary(session: any): string {

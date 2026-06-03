@@ -172,7 +172,7 @@ export default function DashboardsPage() {
               <Kpi label="Cycle time médio" value={`${summary.avg_cycle_days}`} unit="dias" tone="text-development" />
               <Kpi label="Aprovação na 1ª" value={`${summary.first_pass_rate}`} unit="%" tone="text-qa" />
               <Kpi label="Cobertura média" value={`${summary.avg_coverage}`} unit="%" tone="text-planning" />
-              <Kpi label="Custo médio / feature" value={`${summary.avg_cost}`} unit="" tone="text-discovery" />
+              <Kpi label="Custo médio / feature" value={`R$ ${Number(summary.avg_cost ?? 0).toFixed(2)}`} unit="" tone="text-discovery" />
             </div>
             <div className="text-[11px] text-ink-400">
               {summary.done_cards} de {summary.total_cards} cards concluídos nesta visão
@@ -190,7 +190,7 @@ export default function DashboardsPage() {
                 <LineChart data={weekly.map((w) => ({ x: w.week, y: w.coverage }))} color="#C792EA" max={100} />
               </ChartCard>
               <ChartCard title="Custo médio por feature">
-                <LineChart data={weekly.map((w) => ({ x: w.week, y: w.cost }))} color="#F78C6C" />
+                <LineChart data={weekly.map((w) => ({ x: w.week, y: w.cost }))} color="#F78C6C" prefix="R$ " />
               </ChartCard>
             </div>
           </>
@@ -226,10 +226,12 @@ function LineChart({
   data,
   color,
   max,
+  prefix = "",
 }: {
   data: { x: string; y: number }[];
   color: string;
   max?: number;
+  prefix?: string;
 }) {
   const W = 480, H = 180, pad = 30;
   if (data.length === 0)

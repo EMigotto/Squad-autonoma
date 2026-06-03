@@ -14,6 +14,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import Column from "./Column";
 import AssistantFAB from "./AssistantFAB";
+import { APP_VERSION } from "@/lib/version";
 import FeatureCard from "./FeatureCard";
 import CreateFeatureDialog from "./CreateFeatureDialog";
 import CardDetailPanel from "./CardDetailPanel";
@@ -301,11 +302,27 @@ export default function Board({
   return (
     <div className="min-h-screen flex flex-col">
       <AssistantFAB />
+      {/* Faixa de marca Cielo */}
+      <div className="bg-[#00263A] text-white px-6 py-2 flex items-center justify-between">
+        <div className="font-mono text-base tracking-tight flex items-center gap-1.5">
+          <span className="text-[#A6CE39]">{"{"}</span>
+          <span className="font-bold">V.AI</span>
+          <span className="text-[#00AEEF] font-bold">.be</span>
+          <span className="text-[#A6CE39]">{"}"}</span>
+          <span className="ml-2 font-semibold tracking-wide">Cielo</span>
+        </div>
+        <div className="flex items-center gap-3 text-[11px]">
+          <span className="text-white/60">esteira autônoma de engenharia</span>
+          <span className="font-mono bg-white/10 border border-white/15 px-2 py-0.5 rounded-full text-white/90">
+            v{APP_VERSION}
+          </span>
+        </div>
+      </div>
       <header className="border-b border-ink-700 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-6">
           <div>
             <div className="text-xs uppercase tracking-widest text-ink-400">
-              squad autônomo
+              {"{V.AI.be} Cielo"}
             </div>
             <div className="text-sm">
               olá, <span className="text-ink-100">{currentUser.name}</span>

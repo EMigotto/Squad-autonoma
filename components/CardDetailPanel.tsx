@@ -2249,10 +2249,14 @@ function ChatBubble({
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   if (isSystem) {
+    const ts = new Date(message.created_at).toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
     return (
-      <div className="text-[10px] text-ink-400 italic border border-ink-800 p-2">
-        [briefing inicial ·{" "}
-        {new Date(message.created_at).toLocaleTimeString()}]
+      <div className="flex gap-2 items-start text-[11px] text-ink-300 border-l-2 border-development/40 pl-2 py-1">
+        <span className="text-ink-500 shrink-0 font-mono">{ts}</span>
+        <span className="leading-snug whitespace-pre-wrap">{message.content}</span>
       </div>
     );
   }

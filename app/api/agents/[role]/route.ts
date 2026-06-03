@@ -60,7 +60,11 @@ export async function PATCH(
       return NextResponse.json({ error: error.message }, { status: 500 });
 
     let deployResult: any = { action: "skipped" };
-    if (body.system_prompt && body.system_prompt !== existing.system_prompt) {
+    const nameChanged = "name" in body && body.name !== existing.name;
+    const modelChanged = "model" in body && body.model !== existing.model;
+    const promptChanged =
+      "system_prompt" in body && body.system_prompt !== existing.system_prompt;
+    if (nameChanged || modelChanged || promptChanged) {
       try {
         const spec = buildClaudeSpec({
           name: updated.name,
@@ -90,6 +94,7 @@ export async function PATCH(
             role: params.role,
             claude_agent_id: agent.id,
             claude_agent_version: agent.version,
+            model: updated.model,
             system_prompt_hash: hashPrompt(updated.system_prompt),
           });
           deployResult = { action: "updated", id: agent.id, version: agent.version };
@@ -100,6 +105,7 @@ export async function PATCH(
             role: params.role,
             claude_agent_id: agent.id,
             claude_agent_version: agent.version ?? 1,
+            model: updated.model,
             system_prompt_hash: hashPrompt(updated.system_prompt),
           });
           deployResult = { action: "created", id: agent.id };

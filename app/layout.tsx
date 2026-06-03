@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Squad Autônomo",
+  title: "{V.AI.be} Cielo",
   description: "Pair-programming com agentes Claude orquestrado por Kanban",
 };
 
