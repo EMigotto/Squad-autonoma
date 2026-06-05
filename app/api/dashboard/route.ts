@@ -5,25 +5,21 @@ import { computeFeatureBaseline } from "@/lib/metrics";
 export const runtime = "nodejs";
 
 /**
- * Agrega métricas para o dashboard.
- * Query params:
- *   - scope: "all" | "team" | "project"
- *   - team_id, project_id (conforme scope)
+ * Os gráficos comparativos manual×squad usam CUMULATIVO (média acumulada e
+ * saving acumulado), porque média de período cai quando entra uma feature
+ * menor — o que confunde a leitura ("por que a linha manual caiu?"). A média
+ * acumulada estabiliza com mais dados e nunca diminui artificialmente.
  */
 export async function GET(req: Request) {
   const sb = createClient();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
-  if (!user)
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const url = new URL(req.url);
   const scope = url.searchParams.get("scope") ?? "all";
   const teamId = url.searchParams.get("team_id");
   const projectId = url.searchParams.get("project_id");
-  const granularity =
-    url.searchParams.get("granularity") === "day" ? "day" : "week";
+  const granularity = url.searchParams.get("granularity") === "day" ? "day" : "week";
 
   const svc = createServiceClient();
   let query = svc.from("card_metrics").select("*");
@@ -32,15 +28,10 @@ export async function GET(req: Request) {
 
   const { data: rows } = await query;
   const metrics = rows ?? [];
+  const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
 
-  // ---- KPIs globais (cards concluídos) ----
   const done = metrics.filter((m) => m.is_done);
-  const avg = (arr: number[]) =>
-    arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-
-  const cycleDays = done
-    .map((m) => Number(m.cycle_time_hours) / 24)
-    .filter((v) => v > 0);
+  const cycleDays = done.map((m) => Number(m.cycle_time_hours) / 24).filter((v) => v > 0);
   const withGates = metrics.filter((m) => m.gates_total > 0);
   const firstPassRate = withGates.length
     ? (withGates.filter((m) => m.first_pass).length / withGates.length) * 100
@@ -48,9 +39,7 @@ export async function GET(req: Request) {
   const coverage = metrics
     .filter((m) => m.test_coverage_pct != null)
     .map((m) => Number(m.test_coverage_pct));
-  const costs = done
-    .map((m) => Number(m.total_cost))
-    .filter((v) => v > 0);
+  const costs = done.map((m) => Number(m.total_cost)).filter((v) => v > 0);
 
   const summary = {
     total_cards: metrics.length,
@@ -61,12 +50,9 @@ export async function GET(req: Request) {
     avg_cost: +avg(costs).toFixed(2),
   };
 
-  // ---- parâmetros de baseline por projeto (com TEAM mode) ----
-  const { data: settingsRows } = await svc
-    .from("app_settings")
-    .select(
-      "project_id, baseline_loc_per_dev_day, baseline_hours_per_day, baseline_dev_hourly, human_hourly_cost, baseline_hours_s, baseline_hours_m, baseline_hours_l, baseline_hours_xl, baseline_default_complexity, baseline_team_size, baseline_cost_mode"
-    );
+  const { data: settingsRows } = await svc.from("app_settings").select(
+    "project_id, baseline_loc_per_dev_day, baseline_hours_per_day, baseline_dev_hourly, human_hourly_cost, baseline_hours_s, baseline_hours_m, baseline_hours_l, baseline_hours_xl, baseline_default_complexity, baseline_team_size, baseline_cost_mode"
+  );
   const settingsByProject: Record<string, any> = {};
   for (const s of settingsRows ?? []) settingsByProject[s.project_id] = s;
 
@@ -77,55 +63,34 @@ export async function GET(req: Request) {
     return new Date(c).toISOString().slice(0, 10);
   };
 
-  // ---- evolução por bucket (semana ou dia) + comparativo manual x squad ----
   type Bucket = {
     label: string;
-    cycle: number[];
-    cov: number[];
-    cost: number[];
-    manualCycle: number[];
-    manualCost: number[];
-    gatesOk: number;
-    gatesTot: number;
-    saving: number;
+    cycle: number[]; cov: number[]; cost: number[];
+    manualCycle: number[]; manualCost: number[];
+    gatesOk: number; gatesTot: number; saving: number;
   };
   const byBucket: Record<string, Bucket> = {};
-  let baselineCostTotal = 0;
-  let actualCostTotal = 0;
-  let baselineDaysTotal = 0;
-  let cycleDaysTotal = 0;
-  let roiFeatures = 0;
-  let locTotal = 0;
-  let viaLoc = 0;
-  let viaComplexity = 0;
-  let manualAvgCostAcc = 0;
-  let squadAvgCostAcc = 0;
-  let manualAvgDaysAcc = 0;
-  let squadAvgDaysAcc = 0;
+
+  let baselineCostTotal = 0, actualCostTotal = 0;
+  let baselineDaysTotal = 0, cycleDaysTotal = 0;
+  let roiFeatures = 0, locTotal = 0;
+  let viaLoc = 0, viaComplexity = 0;
+  let manualAvgCostAcc = 0, squadAvgCostAcc = 0;
+  let manualAvgDaysAcc = 0, squadAvgDaysAcc = 0;
 
   for (const m of metrics) {
     const k = bucketKeyOf(m);
-    if (k && !byBucket[k])
-      byBucket[k] = {
-        label: k,
-        cycle: [],
-        cov: [],
-        cost: [],
-        manualCycle: [],
-        manualCost: [],
-        gatesOk: 0,
-        gatesTot: 0,
-        saving: 0,
-      };
+    if (k && !byBucket[k]) byBucket[k] = {
+      label: k, cycle: [], cov: [], cost: [],
+      manualCycle: [], manualCost: [],
+      gatesOk: 0, gatesTot: 0, saving: 0,
+    };
     const b = k ? byBucket[k] : null;
+
     if (b) {
-      if (m.is_done && Number(m.cycle_time_hours) > 0)
-        b.cycle.push(Number(m.cycle_time_hours) / 24);
+      if (m.is_done && Number(m.cycle_time_hours) > 0) b.cycle.push(Number(m.cycle_time_hours) / 24);
       if (m.test_coverage_pct != null) b.cov.push(Number(m.test_coverage_pct));
-      if (m.gates_total > 0) {
-        b.gatesTot++;
-        if (m.first_pass) b.gatesOk++;
-      }
+      if (m.gates_total > 0) { b.gatesTot++; if (m.first_pass) b.gatesOk++; }
     }
 
     if (m.is_done) {
@@ -146,16 +111,25 @@ export async function GET(req: Request) {
       squadAvgCostAcc += bl.actual_cost;
       manualAvgDaysAcc += bl.lifecycle_days;
       squadAvgDaysAcc += bl.actual_days;
-      if (bl.method === "loc") {
-        viaLoc++;
-        locTotal += Number(m.loc_estimate ?? 0);
-      } else viaComplexity++;
+      if (bl.method === "loc") { viaLoc++; locTotal += Number(m.loc_estimate ?? 0); }
+      else viaComplexity++;
     }
   }
 
-  const weekly = Object.values(byBucket)
-    .sort((a, b) => a.label.localeCompare(b.label))
-    .map((b) => ({
+  // CUMULATIVOS (running average e running sum)
+  const sorted = Object.values(byBucket).sort((a, b) => a.label.localeCompare(b.label));
+  let cumCycleSum = 0, cumCycleN = 0;
+  let cumCostSum = 0, cumCostN = 0;
+  let cumManualCycleSum = 0, cumManualCycleN = 0;
+  let cumManualCostSum = 0, cumManualCostN = 0;
+  let cumSaving = 0;
+  const weekly = sorted.map((b) => {
+    cumCycleSum += b.cycle.reduce((s, v) => s + v, 0); cumCycleN += b.cycle.length;
+    cumCostSum += b.cost.reduce((s, v) => s + v, 0); cumCostN += b.cost.length;
+    cumManualCycleSum += b.manualCycle.reduce((s, v) => s + v, 0); cumManualCycleN += b.manualCycle.length;
+    cumManualCostSum += b.manualCost.reduce((s, v) => s + v, 0); cumManualCostN += b.manualCost.length;
+    cumSaving += b.saving;
+    return {
       week: b.label,
       cycle_days: +avg(b.cycle).toFixed(1),
       coverage: +avg(b.cov).toFixed(0),
@@ -164,20 +138,23 @@ export async function GET(req: Request) {
       manual_cost: +avg(b.manualCost).toFixed(2),
       saving: +b.saving.toFixed(2),
       first_pass_rate: b.gatesTot ? +((b.gatesOk / b.gatesTot) * 100).toFixed(0) : 0,
-    }));
+      cum_cycle_days: cumCycleN > 0 ? +(cumCycleSum / cumCycleN).toFixed(1) : 0,
+      cum_cost: cumCostN > 0 ? +(cumCostSum / cumCostN).toFixed(2) : 0,
+      cum_manual_cycle_days: cumManualCycleN > 0 ? +(cumManualCycleSum / cumManualCycleN).toFixed(1) : 0,
+      cum_manual_cost: cumManualCostN > 0 ? +(cumManualCostSum / cumManualCostN).toFixed(2) : 0,
+      cum_saving: +cumSaving.toFixed(2),
+    };
+  });
 
   const roi = {
     features_considered: roiFeatures,
-    via_loc: viaLoc,
-    via_complexity: viaComplexity,
-    loc_total: locTotal,
+    via_loc: viaLoc, via_complexity: viaComplexity, loc_total: locTotal,
     baseline_cost_total: +baselineCostTotal.toFixed(2),
     actual_cost_total: +actualCostTotal.toFixed(2),
     savings_money: +(baselineCostTotal - actualCostTotal).toFixed(2),
-    savings_pct:
-      baselineCostTotal > 0
-        ? +(((baselineCostTotal - actualCostTotal) / baselineCostTotal) * 100).toFixed(0)
-        : 0,
+    savings_pct: baselineCostTotal > 0
+      ? +(((baselineCostTotal - actualCostTotal) / baselineCostTotal) * 100).toFixed(0)
+      : 0,
     baseline_days_total: +baselineDaysTotal.toFixed(1),
     cycle_days_total: +cycleDaysTotal.toFixed(1),
     days_saved: +(baselineDaysTotal - cycleDaysTotal).toFixed(1),
@@ -186,20 +163,17 @@ export async function GET(req: Request) {
     manual_avg_days: roiFeatures > 0 ? +(manualAvgDaysAcc / roiFeatures).toFixed(1) : 0,
     squad_avg_days: roiFeatures > 0 ? +(squadAvgDaysAcc / roiFeatures).toFixed(1) : 0,
     team_size_used: (() => {
-      const rs = (settingsRows ?? [])
-        .map((r: any) => Number(r.baseline_team_size) || 0)
-        .filter((v: number) => v > 0);
+      const rs = (settingsRows ?? []).map((r: any) => Number(r.baseline_team_size) || 0).filter((v: number) => v > 0);
       return rs.length ? rs[0] : 4;
     })(),
     cost_mode_used: (() => {
-      const rs = (settingsRows ?? [])
-        .map((r: any) => r.baseline_cost_mode)
-        .filter((v: any) => v);
+      const rs = (settingsRows ?? []).map((r: any) => r.baseline_cost_mode).filter((v: any) => v);
       return rs[0] ?? "team";
     })(),
     granularity,
   };
-  const roiWeekly = weekly.map((w) => ({ week: w.week, saving: w.saving }));
+  // saving cumulativo (running sum) — gráfico do ROI
+  const roiWeekly = weekly.map((w) => ({ week: w.week, saving: w.cum_saving }));
 
   return NextResponse.json({ summary, weekly, roi, roiWeekly, granularity });
 }

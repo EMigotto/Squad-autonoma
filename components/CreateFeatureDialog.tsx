@@ -23,7 +23,7 @@ interface PendingFile {
   error?: string;
 }
 
-const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 MB por arquivo
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB por arquivo
 const MAX_FILES = 5;
 
 export default function CreateFeatureDialog({
@@ -89,16 +89,22 @@ export default function CreateFeatureDialog({
         errors.push(`máximo ${MAX_FILES} arquivos`);
         break;
       }
-      if (f.size > MAX_FILE_SIZE) {
-        errors.push(`${f.name} é maior que 2MB`);
+      const lower = f.name.toLowerCase();
+      const isAllowed =
+        lower.endsWith(".html") ||
+        lower.endsWith(".htm") ||
+        lower.endsWith(".docx") ||
+        lower.endsWith(".doc") ||
+        lower.endsWith(".fig") ||
+        f.type === "text/html" ||
+        f.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+        f.type === "application/msword";
+      if (!isAllowed) {
+        errors.push(`${f.name} — formato não suportado (use .html, .docx ou .fig)`);
         continue;
       }
-      const isHtml =
-        f.type === "text/html" ||
-        f.name.toLowerCase().endsWith(".html") ||
-        f.name.toLowerCase().endsWith(".htm");
-      if (!isHtml) {
-        errors.push(`${f.name} não é HTML`);
+      if (f.size > MAX_FILE_SIZE) {
+        errors.push(`${f.name} é maior que 50MB`);
         continue;
       }
       valid.push({ file: f, status: "pending" });
@@ -217,7 +223,8 @@ export default function CreateFeatureDialog({
     key: keyof typeof form,
     label: string,
     placeholder: string,
-    multiline = false
+    multiline = false,
+    optional = false
   ) {
     const Tag = multiline ? "textarea" : "input";
     return (
@@ -227,7 +234,7 @@ export default function CreateFeatureDialog({
         </label>
         <Tag
           {...({ type: multiline ? undefined : "text" } as any)}
-          required
+          {...(optional ? {} : { required: true })}
           value={form[key]}
           onChange={(e) => setForm({ ...form, [key]: e.target.value })}
           placeholder={placeholder}
@@ -386,13 +393,15 @@ export default function CreateFeatureDialog({
             {field(
               "github_parent_issue",
               "parent issue # (opcional)",
-              "ex: 42"
+              "ex: 42 (deixe em branco se não houver)",
+              false,
+              true
             )}
 
             {/* Upload de HTMLs */}
             <div>
               <label className="block text-xs uppercase tracking-widest text-ink-400 mb-1">
-                protótipos HTML (opcional · até {MAX_FILES} arquivos · 2MB cada)
+                protótipos (HTML · Word · Figma — opcional · até {MAX_FILES} arquivos · 50MB cada)
               </label>
               <div className="text-[11px] text-ink-400 mb-2 leading-relaxed">
                 Anexe HTMLs gerados no Claude Designer (ou outra ferramenta). Os
@@ -403,7 +412,7 @@ export default function CreateFeatureDialog({
               <label className="block bg-ink-950 border border-dashed border-ink-700 hover:border-discovery transition-colors p-4 cursor-pointer text-center text-sm text-ink-300">
                 <input
                   type="file"
-                  accept=".html,.htm,text/html"
+                  accept=".html,.htm,.docx,.doc,.fig,text/html,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword"
                   multiple
                   onChange={handleFileSelect}
                   className="hidden"
