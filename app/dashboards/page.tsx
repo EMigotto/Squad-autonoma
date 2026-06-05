@@ -274,6 +274,86 @@ export default function DashboardsPage() {
                     </div>
                   </ChartCard>
                 </div>
+
+                {/* COMO O ROI É CALCULADO (explicação detalhada) */}
+                <details className="mt-4 border border-ink-700 bg-ink-950 p-3">
+                  <summary className="cursor-pointer text-[11px] font-mono text-ink-100 hover:text-discovery">
+                    // como o ROI é calculado (passo a passo, configurável)
+                  </summary>
+                  <div className="mt-3 text-[11px] text-ink-300 leading-relaxed space-y-2">
+                    <p>
+                      <strong className="text-ink-100">Pergunta-chave:</strong> quanto custaria e quanto demoraria
+                      cada uma dessas features se o time da Cielo as desenvolvesse <em>sem agentes</em>?
+                    </p>
+
+                    <p>
+                      <strong className="text-development">1) Tamanho da feature.</strong> A referência é a quantidade de
+                      código entregue. Se a feature tem LOC medíveis no Git, usamos as linhas adicionadas (LOC). Se não tem
+                      (config, infra, branch já removida), usamos a tag de <strong>complexidade S/M/L/XL</strong> do card —
+                      ou o tamanho padrão configurado, pra nenhuma entrega ficar de fora.
+                    </p>
+
+                    <p>
+                      <strong className="text-development">2) Esforço humano em horas.</strong>
+                      {" "}<code className="text-discovery">esforço_horas = LOC / produtividade × horas/dia</code> (modo LOC)
+                      {" "}ou <code className="text-discovery">esforço_horas = horas_do_tamanho</code> (S/M/L/XL).
+                      Premissas em Settings (produtividade conservadora ~50 LOC/dia, 6h efetivas).
+                    </p>
+
+                    <p>
+                      <strong className="text-development">3) Lifecycle manual (dias).</strong>
+                      {" "}<code className="text-discovery">lifecycle_dias = esforço_horas / horas_por_dia</code>.
+                      Quanto o time humano demoraria de ponta a ponta.
+                    </p>
+
+                    <p>
+                      <strong className="text-development">4) Custo manual — time alocado.</strong>
+                      {" "}O squad humano fica <strong>alocado pelo lifecycle inteiro</strong> — são as <em>N pessoas</em> do
+                      time (PM, TL, devs, QA) com salários rodando todos os dias:
+                      {" "}<code className="text-discovery">custo_manual = esforço_horas × tamanho_do_time × custo/hora</code>.
+                    </p>
+
+                    <p>
+                      <strong className="text-development">5) Custo do squad (com agentes) — comparação justa.</strong>
+                      {" "}O time TAMBÉM fica alocado durante o cycle real (só que muito menor):
+                      {" "}<code className="text-discovery">custo_squad = tokens + (cycle_real_dias × horas/dia) × tamanho_do_time × custo/hora</code>.
+                      Assim os dois lados são contados pelo mesmo critério — time × período × salário — e a diferença vem do
+                      cycle real ser drasticamente menor.
+                    </p>
+
+                    <p>
+                      <strong className="text-development">6) Comparativo final.</strong>
+                      {" "}<code className="text-discovery">saving (R$) = custo_manual − custo_squad</code>;
+                      {" "}<code className="text-discovery">dias_economizados = lifecycle_manual − cycle_real</code>.
+                    </p>
+
+                    <div className="mt-2 p-2 border border-ink-700 bg-ink-900">
+                      <div className="text-[10px] font-mono text-ink-400 mb-1">parâmetros em uso neste período</div>
+                      <div className="grid grid-cols-2 gap-1 text-[10px]">
+                        <div>tamanho do time alocado: <strong className="text-ink-100">{roi.team_size_used ?? 4} pessoas</strong></div>
+                        <div>modo de custo: <strong className="text-ink-100">{roi.cost_mode_used ?? "team"}</strong></div>
+                        <div>features via LOC: <strong className="text-ink-100">{roi.via_loc}</strong></div>
+                        <div>features via complexidade: <strong className="text-ink-100">{roi.via_complexity}</strong></div>
+                      </div>
+                    </div>
+
+                    <p className="text-ink-500 mt-2">
+                      Todos os parâmetros são configuráveis em <strong>Settings → custos → "ROI · baseline humano"</strong>:
+                      LOC/dev-dia, horas/dia, custo/hora, horas por tamanho (S/M/L/XL), tamanho do time alocado e modo de
+                      custo. Ajuste para refletir a realidade da Cielo.
+                    </p>
+
+                    <div className="mt-2 p-2 border border-qa/40 bg-qa/10">
+                      <div className="font-mono text-[10px] text-qa mb-1">// benefício de coleta antecipada</div>
+                      <div className="text-[11px] text-ink-200">
+                        Subir feature mais cedo = receita antecipada e learning antecipado. O squad libera em
+                        {" "}<strong>{roi.cycle_days_total} dias</strong> o que demoraria
+                        {" "}<strong>{roi.baseline_days_total} dias</strong> manualmente. Cada dia adiantado é
+                        capacidade do time pra próxima iniciativa.
+                      </div>
+                    </div>
+                  </div>
+                </details>
               </div>
             )}
 
