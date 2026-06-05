@@ -1166,12 +1166,14 @@ function MetricsPanel({
 }) {
   const [cov, setCov] = useState<string>("");
   const [hrs, setHrs] = useState<string>("");
+  const [cplx, setCplx] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (metrics) {
       setCov(metrics.test_coverage_pct != null ? String(metrics.test_coverage_pct) : "");
       setHrs(metrics.human_hours != null ? String(metrics.human_hours) : "");
+      setCplx(metrics.complexity ?? null);
     }
   }, [metrics]);
 
@@ -1211,6 +1213,32 @@ function MetricsPanel({
             <div className="text-[9px] text-ink-500 mt-1">{t.sub}</div>
           </div>
         ))}
+      </div>
+
+      <div className="mt-2 flex items-center gap-2 text-[10px] flex-wrap">
+        <span className="uppercase tracking-wider text-ink-400">complexidade (ROI)</span>
+        {(["S", "M", "L", "XL"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={async () => {
+              await fetch(`/api/cards/${metrics.card_id}/complexity`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ complexity: t }),
+              });
+              metrics.complexity = t;
+              setCplx(t);
+            }}
+            className={`px-2 py-0.5 border font-mono ${
+              cplx === t ? "border-discovery text-discovery" : "border-ink-700 text-ink-400"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+        <span className="text-ink-500">
+          {cplx ? "tag fixa desta feature" : "vazio · usa LOC, ou o tamanho padrão no ROI"}
+        </span>
       </div>
 
       <div className="mt-2">

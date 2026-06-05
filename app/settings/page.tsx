@@ -23,6 +23,11 @@ interface Settings {
   baseline_loc_per_dev_day?: number | null;
   baseline_hours_per_day?: number | null;
   baseline_dev_hourly?: number | null;
+  baseline_hours_s?: number | null;
+  baseline_hours_m?: number | null;
+  baseline_hours_l?: number | null;
+  baseline_hours_xl?: number | null;
+  baseline_default_complexity?: string | null;
   sensitive_paths?: string;
 }
 
@@ -450,6 +455,50 @@ export default function SettingsPage() {
             >
               salvar parâmetros de ROI
             </button>
+
+            <div className="mt-4 pt-3 border-t border-ink-700">
+              <div className="text-[11px] text-ink-300 mb-2 font-mono">
+                modo complexidade (fallback quando a feature não tem LOC medível — ex.: config/infra)
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {([["S","baseline_hours_s",8],["M","baseline_hours_m",24],["L","baseline_hours_l",80],["XL","baseline_hours_xl",200]] as const).map(
+                  ([tier, key, def]) => (
+                    <div key={key}>
+                      <label className="text-[11px] text-ink-400 block mb-1">{tier} — horas humanas</label>
+                      <input
+                        type="number"
+                        value={(settings as any)[key] ?? def}
+                        onChange={(e) => update(key as any, Number(e.target.value) as any)}
+                        className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+                      />
+                    </div>
+                  )
+                )}
+              </div>
+              <div className="mt-2">
+                <label className="text-[11px] text-ink-400 block mb-1">
+                  tamanho assumido quando a feature não tem LOC nem tag
+                </label>
+                <select
+                  value={settings.baseline_default_complexity ?? "M"}
+                  onChange={(e) => update("baseline_default_complexity", e.target.value as any)}
+                  className="bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
+                >
+                  {["S", "M", "L", "XL"].map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+                <span className="text-[9px] text-ink-500 ml-2">
+                  garante que nenhuma entrega fique de fora do ROI
+                </span>
+              </div>
+              <button
+                onClick={saveSettings}
+                className="mt-3 bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300"
+              >
+                salvar complexidade
+              </button>
+            </div>
           </div>
 
           <button

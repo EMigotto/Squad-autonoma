@@ -87,7 +87,7 @@ export async function recomputeCardMetrics(cardId: string): Promise<void> {
   // --- preserva campos manuais/captados já existentes ---
   const { data: existing } = await sb
     .from("card_metrics")
-    .select("test_coverage_pct, human_hours, input_tokens, output_tokens, loc_estimate")
+    .select("test_coverage_pct, human_hours, input_tokens, output_tokens, loc_estimate, complexity")
     .eq("card_id", cardId)
     .maybeSingle();
 
@@ -165,6 +165,7 @@ export async function recomputeCardMetrics(cardId: string): Promise<void> {
       human_cost: humanCost,
       total_cost: totalCost,
       loc_estimate: locEstimate,
+      complexity: existing?.complexity ?? null,
       iso_week: isoWeek(completedAt ?? startedAt),
       updated_at: new Date().toISOString(),
     },

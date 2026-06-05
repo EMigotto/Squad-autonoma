@@ -89,10 +89,20 @@ export async function GET(req: Request) {
   const { data: settingsRows } = await svc
     .from("app_settings")
     .select(
-      "project_id, baseline_loc_per_dev_day, baseline_hours_per_day, baseline_dev_hourly, human_hourly_cost"
+      "project_id, baseline_loc_per_dev_day, baseline_hours_per_day, baseline_dev_hourly, human_hourly_cost, baseline_hours_s, baseline_hours_m, baseline_hours_l, baseline_hours_xl, baseline_default_complexity"
     );
   const settingsByProject: Record<string, any> = {};
   for (const s of settingsRows ?? []) settingsByProject[s.project_id] = s;
+
+  const tierHours = (cfg: any, tier: string): number => {
+    const map: Record<string, number> = {
+      S: Number(cfg.baseline_hours_s) || 8,
+      M: Number(cfg.baseline_hours_m) || 24,
+      L: Number(cfg.baseline_hours_l) || 80,
+      XL: Number(cfg.baseline_hours_xl) || 200,
+    };
+    return map[(tier || "M").toUpperCase()] ?? map.M;
+  };
 
   const roiByWeek: Record<string, number> = {};
   let baselineCostTotal = 0;
@@ -101,10 +111,10 @@ export async function GET(req: Request) {
   let cycleDaysTotal = 0;
   let roiFeatures = 0;
   let locTotal = 0;
+  let viaLoc = 0;
+  let viaComplexity = 0;
 
   for (const m of done) {
-    const loc = Number(m.loc_estimate ?? 0);
-    if (!loc || loc <= 0) continue;
     const cfg = settingsByProject[m.project_id] ?? {};
     const locPerDay = Number(cfg.baseline_loc_per_dev_day) || 50;
     const hoursPerDay = Number(cfg.baseline_hours_per_day) || 6;
@@ -113,8 +123,19 @@ export async function GET(req: Request) {
         ? Number(cfg.baseline_dev_hourly)
         : Number(cfg.human_hourly_cost) || 120;
 
-    const baselineDays = loc / locPerDay;
-    const baselineHours = baselineDays * hoursPerDay;
+    const loc = Number(m.loc_estimate ?? 0);
+    let baselineHours: number;
+    if (loc > 0) {
+      baselineHours = (loc / locPerDay) * hoursPerDay;
+      locTotal += loc;
+      viaLoc++;
+    } else {
+      // fallback por complexidade (tag da feature ou padrão configurável)
+      const tier = m.complexity || cfg.baseline_default_complexity || "M";
+      baselineHours = tierHours(cfg, tier);
+      viaComplexity++;
+    }
+    const baselineDays = baselineHours / hoursPerDay;
     const baselineCost = baselineHours * devHourly;
     const actualCost = Number(m.total_cost) || 0;
     const cycleDays = Number(m.cycle_time_hours) / 24;
@@ -123,7 +144,6 @@ export async function GET(req: Request) {
     actualCostTotal += actualCost;
     baselineDaysTotal += baselineDays;
     cycleDaysTotal += cycleDays > 0 ? cycleDays : 0;
-    locTotal += loc;
     roiFeatures++;
 
     const wk = m.iso_week;
@@ -132,6 +152,8 @@ export async function GET(req: Request) {
 
   const roi = {
     features_considered: roiFeatures,
+    via_loc: viaLoc,
+    via_complexity: viaComplexity,
     loc_total: locTotal,
     baseline_cost_total: +baselineCostTotal.toFixed(2),
     actual_cost_total: +actualCostTotal.toFixed(2),

@@ -240,14 +240,21 @@ export default function DashboardsPage() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="text-xs text-ink-300 leading-relaxed">
-                    Considerando <strong>{roi.features_considered}</strong> feature(s) concluída(s) com{" "}
-                    <strong>{roi.loc_total.toLocaleString("pt-BR")}</strong> linhas de código, um time humano
-                    levaria <strong>~{roi.baseline_days_total} dias-dev</strong>; o squad entregou em{" "}
-                    <strong>~{roi.cycle_days_total} dias</strong> de cycle time — saving de{" "}
+                    Sobre <strong>{roi.features_considered}</strong> feature(s) concluída(s)
+                    {roi.via_loc > 0 && (
+                      <> — <strong>{roi.via_loc}</strong> medida(s) por LOC ({roi.loc_total.toLocaleString("pt-BR")} linhas)</>
+                    )}
+                    {roi.via_complexity > 0 && (
+                      <> {roi.via_loc > 0 ? "e" : "—"} <strong>{roi.via_complexity}</strong> por complexidade (S/M/L/XL)</>
+                    )}
+                    : um time humano levaria <strong>~{roi.baseline_days_total} dias-dev</strong>; o squad
+                    entregou em <strong>~{roi.cycle_days_total} dias</strong> de cycle time — saving de{" "}
                     <strong className="text-qa">{roi.savings_pct}%</strong> no custo.
                     <div className="mt-2 text-[10px] text-ink-500">
-                      Premissas configuráveis em Settings → custos → "ROI · baseline humano" (LOC/dev-dia,
-                      horas/dia, custo/hora). Baseline = LOC ÷ produtividade; dias-dev são úteis, cycle time é calendário.
+                      Premissas em Settings → custos → "ROI · baseline humano": LOC/dev-dia, horas/dia,
+                      custo/hora e horas por tamanho (S/M/L/XL). Features sem LOC usam a complexidade (tag
+                      da feature ou o tamanho padrão). Baseline = esforço ÷ produtividade; dias-dev são úteis,
+                      cycle time é calendário.
                     </div>
                   </div>
                   <ChartCard title="Saving por semana (R$)">
