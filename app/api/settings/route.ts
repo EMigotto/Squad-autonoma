@@ -76,8 +76,6 @@ export async function PUT(req: Request) {
     "baseline_hours_l",
     "baseline_hours_xl",
     "baseline_default_complexity",
-    "baseline_team_size",
-    "baseline_cost_mode",
   ];
   const patch: Record<string, unknown> = {};
   for (const k of allowed) {

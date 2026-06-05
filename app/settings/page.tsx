@@ -28,8 +28,6 @@ interface Settings {
   baseline_hours_l?: number | null;
   baseline_hours_xl?: number | null;
   baseline_default_complexity?: string | null;
-  baseline_team_size?: number | null;
-  baseline_cost_mode?: string | null;
   sensitive_paths?: string;
 }
 
@@ -499,44 +497,6 @@ export default function SettingsPage() {
                 className="mt-3 bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300"
               >
                 salvar complexidade
-              </button>
-            </div>
-
-            <div className="mt-4 pt-3 border-t border-ink-700">
-              <div className="text-[11px] text-ink-300 mb-2 font-mono">
-                modelo de custo do baseline
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-ink-400 block mb-1">modo</label>
-                  <select
-                    value={settings.baseline_cost_mode ?? "team"}
-                    onChange={(e) => update("baseline_cost_mode", e.target.value as any)}
-                    className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
-                  >
-                    <option value="team">time alocado (fully-loaded)</option>
-                    <option value="effort">esforço (1 dev)</option>
-                  </select>
-                  <div className="text-[9px] text-ink-500 mt-1">
-                    "time alocado" multiplica pelo tamanho do time → reflete o custo real do squad dedicado ao lifecycle (recomendado)
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[11px] text-ink-400 block mb-1">tamanho do time (pessoas)</label>
-                  <input
-                    type="number"
-                    value={settings.baseline_team_size ?? 4}
-                    onChange={(e) => update("baseline_team_size", Number(e.target.value) as any)}
-                    className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm text-ink-100 focus:border-discovery focus:outline-none"
-                  />
-                  <div className="text-[9px] text-ink-500 mt-1">ex.: 4 (PM + TL + Dev + QA)</div>
-                </div>
-              </div>
-              <button
-                onClick={saveSettings}
-                className="mt-3 bg-ink-100 text-ink-950 px-4 py-1.5 text-sm font-semibold hover:bg-ink-300"
-              >
-                salvar modelo de custo
               </button>
             </div>
           </div>
