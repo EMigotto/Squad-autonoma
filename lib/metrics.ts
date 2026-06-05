@@ -553,19 +553,19 @@ export function computeFeatureBaseline(m: any, cfg: BaselineCfg): FeatureBaselin
   const tokenCost = Number(m.token_cost) || 0;
   const humanCostReported = Number(m.human_cost) || 0;
   const cycleHours = Number(m.cycle_time_hours) || 0;
+  const actualDays = cycleHours / 24;
 
-  // Custo do squad — comparação JUSTA com o baseline manual:
-  //  modo "team": time também fica alocado durante o CYCLE REAL, em horas
-  //    úteis. squad_cost = tokens + (cycle_dias × horas/dia) × team × R$/hora
-  //  modo "effort": mantém o custo reportado (tokens + horas pontuais)
+  // Custo do squad — comparação JUSTA com o baseline manual no modo "team":
+  //   o time inteiro também fica alocado durante o cycle real (em horas úteis).
+  //   custo_squad = tokens + (cycle_dias × horas/dia) × time × R$/hora
+  // No modo "effort", mantém o custo reportado (tokens + horas pontuais).
   let actualCost: number;
   if (mode === "team" && cycleHours > 0) {
-    const workingHoursDuringCycle = (cycleHours / 24) * hoursPerDay;
+    const workingHoursDuringCycle = actualDays * hoursPerDay;
     actualCost = tokenCost + workingHoursDuringCycle * teamSize * devHourly;
   } else {
     actualCost = Number(m.total_cost) || tokenCost + humanCostReported;
   }
-  const actualDays = cycleHours / 24;
 
   return {
     method,
