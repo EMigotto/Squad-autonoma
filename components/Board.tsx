@@ -59,6 +59,30 @@ export default function Board({
   const [transitionCardId, setTransitionCardId] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
   const [showCancelled, setShowCancelled] = useState(false);
+  const [boardTotals, setBoardTotals] = useState<{
+    cycle_days_total: number;
+    cost_total: number;
+    saving_money: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!activeProjectId) {
+      setBoardTotals(null);
+      return;
+    }
+    const qs = new URLSearchParams({ scope: "project", project_id: activeProjectId });
+    fetch(`/api/dashboard?${qs.toString()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d?.roi) return setBoardTotals(null);
+        setBoardTotals({
+          cycle_days_total: Number(d.roi.cycle_days_total) || 0,
+          cost_total: Number(d.roi.actual_cost_total) || 0,
+          saving_money: Number(d.roi.savings_money) || 0,
+        });
+      })
+      .catch(() => setBoardTotals(null));
+  }, [activeProjectId, initialCards]);
 
   useEffect(() => {
     const sb = createClient();
@@ -371,6 +395,31 @@ export default function Board({
               <span className="text-planning">
                 <span className="font-semibold">{openGates}</span> aguardam você
               </span>
+            )}
+            {boardTotals && (
+              <>
+                <span className="border-l border-ink-700 pl-4 text-development">
+                  <span className="font-semibold">{boardTotals.cycle_days_total.toFixed(1)}</span> dias entregues
+                </span>
+                <span className="text-discovery">
+                  <span className="font-semibold">
+                    R${" "}
+                    {boardTotals.cost_total.toLocaleString("pt-BR", {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>{" "}
+                  esforço
+                </span>
+                <span className="text-qa">
+                  <span className="font-semibold">
+                    R${" "}
+                    {boardTotals.saving_money.toLocaleString("pt-BR", {
+                      maximumFractionDigits: 0,
+                    })}
+                  </span>{" "}
+                  economia
+                </span>
+              </>
             )}
           </div>
         </div>
