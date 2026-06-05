@@ -96,6 +96,7 @@ export default function CardDetailPanel({
   const [metrics, setMetrics] = useState<any>(null);
   const [currency, setCurrency] = useState("BRL");
   const [stageBreakdown, setStageBreakdown] = useState<any[]>([]);
+  const [baseline, setBaseline] = useState<any | null>(null);
   const [activeTab, setActiveTab] = useState<"details" | "chat">("details");
 
   async function loadMetrics() {
@@ -105,6 +106,7 @@ export default function CardDetailPanel({
       setMetrics(data.metrics);
       setCurrency(data.currency ?? "BRL");
       setStageBreakdown(data.stage_breakdown ?? []);
+      setBaseline(data.baseline ?? null);
     } catch {
       /* ignore */
     }
@@ -496,7 +498,7 @@ export default function CardDetailPanel({
           {activeTab === "details" && (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
             {/* Indicadores do card */}
-            <MetricsPanel metrics={metrics} currency={currency} onSave={saveMetric} />
+            <MetricsPanel metrics={metrics} currency={currency} baseline={baseline} onSave={saveMetric} />
 
             {/* Custo por etapa (incremental) */}
             <StageCostBreakdown stages={stageBreakdown} currency={currency} />
@@ -1158,10 +1160,12 @@ function fmtCycleH(hours: number | null | undefined): string {
 function MetricsPanel({
   metrics,
   currency,
+  baseline,
   onSave,
 }: {
   metrics: any;
   currency: string;
+  baseline?: any;
   onSave: (p: { test_coverage_pct?: number | null; human_hours?: number | null }) => void;
 }) {
   const [cov, setCov] = useState<string>("");
@@ -1240,6 +1244,44 @@ function MetricsPanel({
           {cplx ? "tag fixa desta feature" : "vazio · usa LOC, ou o tamanho padrão no ROI"}
         </span>
       </div>
+
+      {baseline && (
+        <div className="mt-3 border border-qa/30 bg-qa/5 p-3">
+          <div className="text-[10px] uppercase tracking-widest text-qa mb-2 font-mono">
+            // ROI desta feature
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+            <div>
+              <div className="text-ink-400 text-[9px] uppercase">Baseline usado</div>
+              <div className="text-ink-100">
+                {baseline.method === "loc" ? "LOC" : "Tamanho"}
+                <span className="text-ink-400"> · {baseline.size_label}</span>
+              </div>
+            </div>
+            <div>
+              <div className="text-ink-400 text-[9px] uppercase">Lifecycle manual</div>
+              <div className="text-ink-100">~{baseline.lifecycle_days} dias</div>
+              <div className="text-ink-500 text-[9px]">
+                squad: {baseline.actual_days} dias · economia {baseline.days_saved} dias
+              </div>
+            </div>
+            <div>
+              <div className="text-ink-400 text-[9px] uppercase">Custo manual ({baseline.team_size}p)</div>
+              <div className="text-ink-100">{moneyFmt(baseline.manual_cost)}</div>
+              <div className="text-ink-500 text-[9px]">squad: {moneyFmt(baseline.actual_cost)}</div>
+            </div>
+            <div>
+              <div className="text-ink-400 text-[9px] uppercase">Saving</div>
+              <div className="text-qa font-semibold">{moneyFmt(baseline.saving_money)}</div>
+              <div className="text-ink-500 text-[9px]">
+                {baseline.manual_cost > 0
+                  ? Math.round(((baseline.manual_cost - baseline.actual_cost) / baseline.manual_cost) * 100)
+                  : 0}% do baseline
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="mt-2">
         {editing ? (

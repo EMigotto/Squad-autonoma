@@ -483,3 +483,86 @@ export async function estimateFeatureLoc(featureId: string): Promise<number | nu
   }
   return null;
 }
+
+export interface BaselineCfg {
+  baseline_loc_per_dev_day?: number;
+  baseline_hours_per_day?: number;
+  baseline_dev_hourly?: number;
+  human_hourly_cost?: number;
+  baseline_hours_s?: number;
+  baseline_hours_m?: number;
+  baseline_hours_l?: number;
+  baseline_hours_xl?: number;
+  baseline_default_complexity?: string;
+  baseline_team_size?: number;
+  baseline_cost_mode?: string;
+}
+
+export interface FeatureBaseline {
+  method: "loc" | "complexity";
+  size_label: string; // ex.: "1.240 LOC" ou "tamanho L"
+  effort_hours: number; // horas-pessoa de esforço
+  lifecycle_days: number; // dias do modelo manual (calendário ~ por dev dedicado)
+  team_size: number;
+  manual_cost: number; // custo do baseline humano (R$)
+  actual_cost: number; // custo real do squad (R$)
+  actual_days: number; // cycle time real (dias)
+  saving_money: number;
+  days_saved: number;
+}
+
+// Calcula o baseline humano de UMA feature a partir da linha de card_metrics.
+export function computeFeatureBaseline(m: any, cfg: BaselineCfg): FeatureBaseline {
+  const locPerDay = Number(cfg.baseline_loc_per_dev_day) || 50;
+  const hoursPerDay = Number(cfg.baseline_hours_per_day) || 6;
+  const devHourly =
+    Number(cfg.baseline_dev_hourly) > 0
+      ? Number(cfg.baseline_dev_hourly)
+      : Number(cfg.human_hourly_cost) || 120;
+  const teamSize = Number(cfg.baseline_team_size) > 0 ? Number(cfg.baseline_team_size) : 4;
+  const mode = cfg.baseline_cost_mode === "effort" ? "effort" : "team";
+
+  const tierMap: Record<string, number> = {
+    S: Number(cfg.baseline_hours_s) || 8,
+    M: Number(cfg.baseline_hours_m) || 24,
+    L: Number(cfg.baseline_hours_l) || 80,
+    XL: Number(cfg.baseline_hours_xl) || 200,
+  };
+
+  const loc = Number(m.loc_estimate ?? 0);
+  let method: "loc" | "complexity";
+  let effortHours: number;
+  let sizeLabel: string;
+  if (loc > 0) {
+    method = "loc";
+    effortHours = (loc / locPerDay) * hoursPerDay;
+    sizeLabel = `${loc.toLocaleString("pt-BR")} LOC`;
+  } else {
+    method = "complexity";
+    const tier = (m.complexity || cfg.baseline_default_complexity || "M").toUpperCase();
+    effortHours = tierMap[tier] ?? tierMap.M;
+    sizeLabel = `tamanho ${tier}`;
+  }
+
+  const lifecycleDays = effortHours / hoursPerDay;
+  // modelo TIME: o squad humano (teamSize pessoas) fica alocado pelo lifecycle.
+  // custo = horas-pessoa de esforço x time x custo/hora.
+  const manualCost =
+    mode === "team" ? effortHours * teamSize * devHourly : effortHours * devHourly;
+
+  const actualCost = Number(m.total_cost) || 0;
+  const actualDays = Number(m.cycle_time_hours) / 24;
+
+  return {
+    method,
+    size_label: sizeLabel,
+    effort_hours: +effortHours.toFixed(1),
+    lifecycle_days: +lifecycleDays.toFixed(1),
+    team_size: teamSize,
+    manual_cost: +manualCost.toFixed(2),
+    actual_cost: +actualCost.toFixed(2),
+    actual_days: +(actualDays > 0 ? actualDays : 0).toFixed(1),
+    saving_money: +(manualCost - actualCost).toFixed(2),
+    days_saved: +(lifecycleDays - (actualDays > 0 ? actualDays : 0)).toFixed(1),
+  };
+}

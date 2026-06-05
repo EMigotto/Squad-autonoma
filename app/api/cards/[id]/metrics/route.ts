@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { recomputeCardMetrics, updateManualMetrics, getStageCostBreakdown } from "@/lib/metrics";
+import { recomputeCardMetrics, updateManualMetrics, getStageCostBreakdown, computeFeatureBaseline } from "@/lib/metrics";
 
 export const runtime = "nodejs";
 
@@ -29,16 +29,26 @@ export async function GET(
     .eq("card_id", params.id)
     .maybeSingle();
 
-  // moeda do projeto
+  // moeda + parâmetros de baseline (pra calcular ROI da feature)
   let currency = "BRL";
+  let baseline: any = null;
   if (data?.project_id) {
     const { data: s } = await svc
       .from("app_settings")
-      .select("metrics_currency")
+      .select(
+        "metrics_currency, baseline_loc_per_dev_day, baseline_hours_per_day, baseline_dev_hourly, human_hourly_cost, baseline_hours_s, baseline_hours_m, baseline_hours_l, baseline_hours_xl, baseline_default_complexity, baseline_team_size, baseline_cost_mode"
+      )
       .eq("project_id", data.project_id)
       .limit(1)
       .maybeSingle();
     currency = s?.metrics_currency ?? "BRL";
+    if (data && s) {
+      try {
+        baseline = computeFeatureBaseline(data, s);
+      } catch {
+        baseline = null;
+      }
+    }
   }
 
   // breakdown por etapa (custo incremental + acumulado)
@@ -53,6 +63,7 @@ export async function GET(
     metrics: data,
     currency,
     stage_breakdown: stageBreakdown.stages,
+    baseline,
   });
 }
 
