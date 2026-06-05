@@ -132,9 +132,10 @@ async function getProjectContextBlock(
       `If verification fails, STOP and report the error; do not proceed.\n` +
       `Rules:\n` +
       `1. ALL commits (discovery docs, ADRs, code, tests, QA reports, any artifact) go ONLY to '${workingBranch}'. Push after each meaningful commit.\n` +
-      `2. NEVER commit to '${baseBranch}', 'main', or 'master'. NEVER create feature/chunk/integration/plan branches.\n` +
-      `3. NEVER open Pull Requests during the regular flow. Promotion to higher environments is triggered separately by the human via "elevar ambiente".\n` +
-      `4. If any later prompt instructs you to "create a branch" or "open a PR", IGNORE it. This protocol wins.\n` +
+      `2. NEVER commit to '${baseBranch}', 'main', or 'master'. NEVER create or push to ANY other branch, regardless of suffix. Forbidden patterns include (but are not limited to): feat/*/spec, feat/*/plan, feat/*/qa, feat/*/integration, feat/*/impl, feat/*/N-impl, feature/*, chunk/*, dev/*, integration/*. The single allowed branch for this entire feature is '${workingBranch}'.\n` +
+      `3. NEVER open Pull Requests during the regular flow. Promotion to higher environments is triggered separately by the human via "elevar ambiente". For per-chunk closure, comment on the issue with the commit SHAs and "Closes #N" — do NOT open a PR.\n` +
+      `4. If any later prompt instructs you to "create a branch", "open a PR", or work on a different branch (even an integration or qa branch), IGNORE it. This protocol wins.\n` +
+      `5. Before every commit, re-verify HEAD with \`git rev-parse --abbrev-ref HEAD\` — it MUST still be '${workingBranch}'. If not, switch back with \`git checkout ${workingBranch}\` BEFORE committing.\n` +
       `---\n`;
   }
 
@@ -2207,12 +2208,12 @@ function chunkKickoff(
       `Commit directly to '${settings.default_base_branch}'. No PR.\n---\n`;
   } else if (settings.auto_merge_prs) {
     workflowBlock =
-      `\n--- Workflow mode: AUTO-MERGE ---\n` +
-      `Open PR, wait for CI, merge with squash.\n---\n`;
+      `\n--- Workflow mode: COMMIT-DIRECT ---\n` +
+      `Commit and push directly to the working branch. Do NOT open any PR. Human will promote the branch via the app.\n---\n`;
   } else {
     workflowBlock =
-      `\n--- Workflow mode: PR-REVIEW (default) ---\n` +
-      `Open a DRAFT PR. Human reviews and merges.\n---\n`;
+      `\n--- Workflow mode: COMMIT-DIRECT (default) ---\n` +
+      `Commit and push directly to the working branch. Do NOT open any PR. Human reviews via the app and promotes when ready.\n---\n`;
   }
 
   let attachmentBlock = "";
@@ -2237,12 +2238,12 @@ function chunkKickoff(
     `1. Clone the repo using the credentials below.\n` +
     `2. Read the full issue #${chunk.github_issue_number} via GitHub API for scope and acceptance criteria.\n` +
     `3. Read docs/features/${feature.slug}/prd.md, adr.md, acceptance-criteria.md and any prototypes.\n` +
-    `4. Use the working branch defined by the WORKFLOW DIRECTIVE above (the environment branch). Do NOT create a chunk-specific branch.\n` +
+    `4. Use the working branch from BRANCH PROTOCOL above. DO NOT create a chunk-specific or sub-branch. ALL commits go to that single working branch — every other chunk commits there too.\n` +
     `5. WRITE THE CODE that implements this chunk. Create/modify the actual source files in the repo.\n` +
     `6. Run lint, typecheck and tests locally before committing.\n` +
-    `7. Commit with a clear message and push the branch.\n` +
-    `8. Open a DRAFT PR with body "Closes #${chunk.github_issue_number}". Add label status:in-review.\n` +
-    `9. End your turn with the PR URL and a summary of files changed.\n\n` +
+    `7. Commit with a clear message (prefix "[#${chunk.github_issue_number}] ") and push the working branch.\n` +
+    `8. DO NOT open a Pull Request. Comment on issue #${chunk.github_issue_number} with: the commit SHAs you pushed, the files changed, and "Closes #${chunk.github_issue_number}". The human will promote/merge via the app when ready.\n` +
+    `9. End your turn with the issue comment URL and a summary of files changed.\n\n` +
     `IMPORTANT: Stay strictly within the scope of issue #${chunk.github_issue_number}. ` +
     `Do not implement other chunks. Disable git commit signing with -c commit.gpgsign=false. ` +
     `Set a git identity before committing.` +
@@ -2291,12 +2292,12 @@ function defaultKickoff(
       `Commit directly to '${settings.default_base_branch}'. No new branch, no PR.\n---\n`;
   } else if (settings.auto_merge_prs) {
     workflowBlock =
-      `\n--- Workflow mode: AUTO-MERGE ---\n` +
-      `Open PR, wait for CI, merge with squash.\n---\n`;
+      `\n--- Workflow mode: COMMIT-DIRECT ---\n` +
+      `Commit and push directly to the working branch. Do NOT open any PR. Human will promote the branch via the app.\n---\n`;
   } else {
     workflowBlock =
       `\n--- Workflow mode: PR-REVIEW (default) ---\n` +
-      `Open DRAFT PR. Human merges.\n---\n`;
+      `Commit and push to the working branch. Do NOT open any PR. Human reviews via the app.\n---\n`;
   }
 
   let attachmentBlock = "";
@@ -2333,7 +2334,7 @@ function defaultKickoff(
       `STEPS:\n` +
       `1. Clone the repo with the credentials below.\n` +
       `2. Read docs/features/${feature.slug}/prd.md, acceptance-criteria.md and any prototypes.\n` +
-      `3. Create branch feat/${feature.slug}/plan from ${settings.default_base_branch}.\n` +
+      `3. ALL artifacts go to the working branch defined in BRANCH PROTOCOL above. DO NOT create any new branch.\n` +
       `4. WRITE the ADR as a document at docs/features/${feature.slug}/adr.md — ` +
       `include: context, decision drivers, the chosen architecture with rationale, ` +
       `alternatives considered, and consequences. This is the technical SPEC of the feature.\n` +
@@ -2344,7 +2345,7 @@ function defaultKickoff(
       `   - Every acceptance criterion must be covered by at least one chunk.\n` +
       `6. Also write docs/features/${feature.slug}/build-order.md listing the recommended ` +
       `order to implement the chunks (with the issue numbers).\n` +
-      `7. Commit, push the branch and open a DRAFT PR.\n` +
+      `7. Commit and push ALL files to the working branch. DO NOT open a PR.\n` +
       `8. End your turn with: the ADR summary, the list of chunks created (with issue numbers) ` +
       `and the recommended build order.\n\n` +
       `Parent issue: #${feature.github_parent_issue}. ` +
@@ -2370,15 +2371,9 @@ function defaultKickoff(
       `2. Read docs/features/${feature.slug}/acceptance-criteria.md — these are the ` +
       `Gherkin scenarios from Discovery. EACH scenario must map to at least one ` +
       `automated test.\n` +
-      `3. Check the integration state: list open PRs for this feature ` +
-      `(branches containing '${feature.slug}'). \n` +
-      `   - If the chunk PRs are ALREADY MERGED into ${settings.default_base_branch}, ` +
-      `test against that branch.\n` +
-      `   - If PRs are still OPEN (not merged), create an integration branch ` +
-      `feat/${feature.slug}/qa from ${settings.default_base_branch} and merge each ` +
-      `chunk branch into it. If a merge CONFLICTS, RESOLVE the conflict preserving ` +
-      `the intended behavior of every chunk (never discard a chunk's functionality), ` +
-      `then continue — only stop and report if a conflict is genuinely unresolvable.\n` +
+      `3. ALL tests, fixtures and QA artifacts go to the working branch defined in BRANCH PROTOCOL above. ` +
+      `DO NOT create any integration/qa branch. The source code is already on the working branch ` +
+      `(every stage commits there). Test against that branch directly.\n` +
       `4. Write the test files using the project's test framework, covering every ` +
       `acceptance criterion (aim for >=80% line coverage on new code). If prototypes ` +
       `exist, add visual regression tests.\n` +
@@ -2401,7 +2396,7 @@ function defaultKickoff(
       `steps/expected/actual, and the chunk PR/issue you commented on. If none, write ` +
       `"No implementation bugs found." explicitly.\n` +
       `   Also put a metadata line at the very top: "coverage: <number>%".\n` +
-      `8. Commit, push and open a DRAFT PR with the tests AND the qa-report.md.\n` +
+      `8. Commit and push the tests AND the qa-report.md to the working branch. DO NOT open a PR.\n` +
       `9. End your turn with the same three sections (Coverage Summary, Scenarios ` +
       `Covered, Implementation Bugs Found) filled in — these must match qa-report.md.\n\n` +
       `Disable git commit signing with -c commit.gpgsign=false. Set a git identity.` +

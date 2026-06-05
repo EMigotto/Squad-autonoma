@@ -558,7 +558,6 @@ export function computeFeatureBaseline(m: any, cfg: BaselineCfg): FeatureBaselin
   // Custo do squad — comparação JUSTA com o baseline manual no modo "team":
   //   o time inteiro também fica alocado durante o cycle real (em horas úteis).
   //   custo_squad = tokens + (cycle_dias × horas/dia) × time × R$/hora
-  // No modo "effort", mantém o custo reportado (tokens + horas pontuais).
   let actualCost: number;
   if (mode === "team" && cycleHours > 0) {
     const workingHoursDuringCycle = actualDays * hoursPerDay;

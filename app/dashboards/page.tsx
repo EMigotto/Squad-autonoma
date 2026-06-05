@@ -10,14 +10,6 @@ interface Weekly {
   coverage: number;
   cost: number;
   first_pass_rate: number;
-  manual_cycle_days?: number;
-  manual_cost?: number;
-  saving?: number;
-  cum_cycle_days?: number;
-  cum_cost?: number;
-  cum_manual_cycle_days?: number;
-  cum_manual_cost?: number;
-  cum_saving?: number;
 }
 interface Summary {
   total_cards: number;
@@ -39,7 +31,6 @@ export default function DashboardsPage() {
   const [roi, setRoi] = useState<any | null>(null);
   const [roiWeekly, setRoiWeekly] = useState<{ week: string; saving: number }[]>([]);
   const [loading, setLoading] = useState(true);
-  const [granularity, setGranularity] = useState<"week" | "day">("week");
 
   useEffect(() => {
     fetch("/api/projects")
@@ -59,7 +50,6 @@ export default function DashboardsPage() {
     const qs = new URLSearchParams({ scope });
     if (scope === "team" && teamId) qs.set("team_id", teamId);
     if (scope === "project" && projectId) qs.set("project_id", projectId);
-    qs.set("granularity", granularity);
     const res = await fetch(`/api/dashboard?${qs.toString()}`);
     const data = await res.json();
     setSummary(data.summary);
@@ -67,7 +57,7 @@ export default function DashboardsPage() {
     setRoi(data.roi ?? null);
     setRoiWeekly(data.roiWeekly ?? []);
     setLoading(false);
-  }, [scope, teamId, projectId, granularity]);
+  }, [scope, teamId, projectId]);
 
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState("");
@@ -267,15 +257,12 @@ export default function DashboardsPage() {
                       cycle time é calendário.
                     </div>
                   </div>
-                  <ChartCard title="Saving ACUMULADO (R$) — running sum">
+                  <ChartCard title="Saving por semana (R$)">
                     <LineChart data={roiWeekly.map((w) => ({ x: w.week, y: w.saving }))} color="#1a8a4a" prefix="R$ " />
-                    <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
-                      cada ponto = soma de TODO saving até essa data. linha sempre sobe (nunca cai com nova feature).
-                    </div>
                   </ChartCard>
                 </div>
 
-                {/* COMO O ROI É CALCULADO (explicação detalhada) */}
+                {/* COMO O ROI É CALCULADO (explicação detalhada, configurável) */}
                 <details className="mt-4 border border-ink-700 bg-ink-950 p-3">
                   <summary className="cursor-pointer text-[11px] font-mono text-ink-100 hover:text-discovery">
                     // como o ROI é calculado (passo a passo, configurável)
@@ -285,137 +272,68 @@ export default function DashboardsPage() {
                       <strong className="text-ink-100">Pergunta-chave:</strong> quanto custaria e quanto demoraria
                       cada uma dessas features se o time da Cielo as desenvolvesse <em>sem agentes</em>?
                     </p>
-
                     <p>
-                      <strong className="text-development">1) Tamanho da feature.</strong> A referência é a quantidade de
-                      código entregue. Se a feature tem LOC medíveis no Git, usamos as linhas adicionadas (LOC). Se não tem
-                      (config, infra, branch já removida), usamos a tag de <strong>complexidade S/M/L/XL</strong> do card —
-                      ou o tamanho padrão configurado, pra nenhuma entrega ficar de fora.
+                      <strong className="text-development">1) Tamanho da feature.</strong> Se a feature tem LOC medíveis no Git,
+                      usamos linhas adicionadas. Caso contrário, usamos a tag de complexidade <strong>S/M/L/XL</strong> do card
+                      (ou o tamanho padrão). Nenhuma entrega fica de fora.
                     </p>
-
                     <p>
-                      <strong className="text-development">2) Esforço humano em horas.</strong>
+                      <strong className="text-development">2) Esforço humano (horas).</strong>
                       {" "}<code className="text-discovery">esforço_horas = LOC / produtividade × horas/dia</code> (modo LOC)
                       {" "}ou <code className="text-discovery">esforço_horas = horas_do_tamanho</code> (S/M/L/XL).
-                      Premissas em Settings (produtividade conservadora ~50 LOC/dia, 6h efetivas).
                     </p>
-
                     <p>
                       <strong className="text-development">3) Lifecycle manual (dias).</strong>
-                      {" "}<code className="text-discovery">lifecycle_dias = esforço_horas / horas_por_dia</code>.
-                      Quanto o time humano demoraria de ponta a ponta.
+                      {" "}<code className="text-discovery">lifecycle = esforço_horas / horas_por_dia</code>.
                     </p>
-
                     <p>
                       <strong className="text-development">4) Custo manual — time alocado.</strong>
-                      {" "}O squad humano fica <strong>alocado pelo lifecycle inteiro</strong> — são as <em>N pessoas</em> do
-                      time (PM, TL, devs, QA) com salários rodando todos os dias:
+                      {" "}O squad humano fica alocado pelo lifecycle inteiro — são as N pessoas do time (PM, TL, devs, QA) com
+                      cada salário rodando todos os dias:
                       {" "}<code className="text-discovery">custo_manual = esforço_horas × tamanho_do_time × custo/hora</code>.
                     </p>
-
                     <p>
-                      <strong className="text-development">5) Custo do squad (com agentes) — comparação justa.</strong>
-                      {" "}O time TAMBÉM fica alocado durante o cycle real (só que muito menor):
+                      <strong className="text-development">5) Custo do squad (vibe coding) — comparação justa.</strong>
+                      {" "}O time também fica alocado durante o cycle real (só que muito menor):
                       {" "}<code className="text-discovery">custo_squad = tokens + (cycle_real_dias × horas/dia) × tamanho_do_time × custo/hora</code>.
-                      Assim os dois lados são contados pelo mesmo critério — time × período × salário — e a diferença vem do
-                      cycle real ser drasticamente menor.
+                      Os dois lados são contados pelo mesmo critério — time × período × salário — a diferença vem do cycle real
+                      ser drasticamente menor.
                     </p>
-
                     <p>
-                      <strong className="text-development">6) Comparativo final.</strong>
-                      {" "}<code className="text-discovery">saving (R$) = custo_manual − custo_squad</code>;
-                      {" "}<code className="text-discovery">dias_economizados = lifecycle_manual − cycle_real</code>.
+                      <strong className="text-development">6) Comparativo.</strong>
+                      {" "}<code className="text-discovery">saving = custo_manual − custo_squad</code>;
+                      {" "}<code className="text-discovery">dias_economizados = lifecycle − cycle_real</code>.
                     </p>
-
-                    <div className="mt-2 p-2 border border-ink-700 bg-ink-900">
-                      <div className="text-[10px] font-mono text-ink-400 mb-1">parâmetros em uso neste período</div>
-                      <div className="grid grid-cols-2 gap-1 text-[10px]">
-                        <div>tamanho do time alocado: <strong className="text-ink-100">{roi.team_size_used ?? 4} pessoas</strong></div>
-                        <div>modo de custo: <strong className="text-ink-100">{roi.cost_mode_used ?? "team"}</strong></div>
-                        <div>features via LOC: <strong className="text-ink-100">{roi.via_loc}</strong></div>
-                        <div>features via complexidade: <strong className="text-ink-100">{roi.via_complexity}</strong></div>
-                      </div>
-                    </div>
-
-                    <p className="text-ink-500 mt-2">
-                      Todos os parâmetros são configuráveis em <strong>Settings → custos → "ROI · baseline humano"</strong>:
-                      LOC/dev-dia, horas/dia, custo/hora, horas por tamanho (S/M/L/XL), tamanho do time alocado e modo de
-                      custo. Ajuste para refletir a realidade da Cielo.
-                    </p>
-
                     <div className="mt-2 p-2 border border-qa/40 bg-qa/10">
                       <div className="font-mono text-[10px] text-qa mb-1">// benefício de coleta antecipada</div>
                       <div className="text-[11px] text-ink-200">
-                        Subir feature mais cedo = receita antecipada e learning antecipado. O squad libera em
-                        {" "}<strong>{roi.cycle_days_total} dias</strong> o que demoraria
-                        {" "}<strong>{roi.baseline_days_total} dias</strong> manualmente. Cada dia adiantado é
-                        capacidade do time pra próxima iniciativa.
+                        O squad libera em <strong>{roi.cycle_days_total} dias</strong> o que demoraria
+                        {" "}<strong>{roi.baseline_days_total} dias</strong> manualmente. Cada dia adiantado é capacidade
+                        do time pra próxima iniciativa.
                       </div>
                     </div>
+                    <p className="text-ink-500 mt-2">
+                      Parâmetros configuráveis em <strong>Settings → custos → "ROI · baseline humano"</strong>: LOC/dev-dia,
+                      horas/dia, custo/hora, horas por tamanho (S/M/L/XL), tamanho do time e modo de custo.
+                    </p>
                   </div>
                 </details>
               </div>
             )}
 
-            {/* GRANULARIDADE */}
-            <div className="mt-6 mb-2 flex items-center gap-2 text-[11px]">
-              <span className="uppercase tracking-wider text-ink-400 font-mono">// granularidade</span>
-              {(["week", "day"] as const).map((g) => (
-                <button
-                  key={g}
-                  onClick={() => setGranularity(g)}
-                  className={`px-3 py-1 border font-mono ${
-                    granularity === g ? "border-ink-100 text-ink-100" : "border-ink-700 text-ink-400 hover:text-ink-100"
-                  }`}
-                >
-                  {g === "week" ? "por semana" : "por dia"}
-                </button>
-              ))}
-              <span className="text-[10px] text-ink-500 ml-2">
-                gráficos abaixo usam <strong>média acumulada</strong> — estabilizam com mais dados, nunca caem por entrada de feature menor
-              </span>
-            </div>
-
-            {/* EVOLUÇÃO POR PERÍODO — comparativo manual × squad (CUMULATIVO) */}
+            {/* EVOLUÇÃO SEMANAL */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <ChartCard title="Cycle time — squad vs. manual (média acumulada, dias)">
-                <LineChart
-                  data={weekly.map((w) => ({ x: w.week, y: w.cum_cycle_days ?? w.cycle_days }))}
-                  color="#0086b8"
-                  compare={weekly.map((w) => ({ x: w.week, y: w.cum_manual_cycle_days ?? w.manual_cycle_days ?? 0 }))}
-                  compareColor="#a8730a"
-                  mainLabel="squad (vibe coding)"
-                  compareLabel="manual (estimado)"
-                />
-                <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
-                  média acumulada de TODAS as features concluídas até a data. quanto mais dados, mais estável. squad ↓ manual = comparação direta.
-                </div>
+              <ChartCard title="Cycle time (dias) — semana a semana">
+                <LineChart data={weekly.map((w) => ({ x: w.week, y: w.cycle_days }))} color="#4F9DF7" />
               </ChartCard>
               <ChartCard title="Taxa de aprovação na 1ª (%)">
                 <LineChart data={weekly.map((w) => ({ x: w.week, y: w.first_pass_rate }))} color="#5BD17B" max={100} />
-                <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
-                  % de etapas aprovadas na 1ª tentativa em cada período. alto = qualidade da entrega do agente.
-                </div>
               </ChartCard>
               <ChartCard title="Cobertura de testes (%)">
                 <LineChart data={weekly.map((w) => ({ x: w.week, y: w.coverage }))} color="#C792EA" max={100} />
-                <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
-                  cobertura média do período. extraída do qa-report.md das features concluídas — se aparece 0 é porque o artefato não trouxe a métrica.
-                </div>
               </ChartCard>
-              <ChartCard title="Custo médio por feature — squad vs. manual (acumulado)">
-                <LineChart
-                  data={weekly.map((w) => ({ x: w.week, y: w.cum_cost ?? w.cost }))}
-                  color="#7c3aed"
-                  compare={weekly.map((w) => ({ x: w.week, y: w.cum_manual_cost ?? w.manual_cost ?? 0 }))}
-                  compareColor="#a8730a"
-                  prefix="R$ "
-                  mainLabel="squad (vibe coding)"
-                  compareLabel="manual (estimado)"
-                />
-                <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
-                  R$ médio acumulado por feature. squad inclui tokens + (cycle × time × R$/hora). manual = esforço × time × R$/hora.
-                </div>
+              <ChartCard title="Custo médio por feature">
+                <LineChart data={weekly.map((w) => ({ x: w.week, y: w.cost }))} color="#F78C6C" prefix="R$ " />
               </ChartCard>
             </div>
           </>
@@ -452,27 +370,18 @@ function LineChart({
   color,
   max,
   prefix = "",
-  compare,
-  compareColor = "#a8730a",
-  compareLabel,
-  mainLabel,
 }: {
   data: { x: string; y: number }[];
   color: string;
   max?: number;
   prefix?: string;
-  compare?: { x: string; y: number }[];
-  compareColor?: string;
-  compareLabel?: string;
-  mainLabel?: string;
 }) {
   const W = 480, H = 180, pad = 30;
   if (data.length === 0)
     return <div className="text-xs text-ink-500 italic">sem dados</div>;
 
   const ys = data.map((d) => d.y);
-  const cys = (compare ?? []).map((d) => d.y);
-  const maxY = max ?? Math.max(1, ...ys, ...cys) * 1.15;
+  const maxY = max ?? Math.max(1, ...ys) * 1.15;
   const minY = 0;
   const n = data.length;
   const xStep = n > 1 ? (W - pad * 2) / (n - 1) : 0;
@@ -481,47 +390,33 @@ function LineChart({
 
   const pts = data.map((d, i) => `${px(i)},${scaleY(d.y)}`).join(" ");
   const area = `${pad},${H - pad} ${pts} ${px(n - 1)},${H - pad}`;
-  const cmpPts = (compare ?? []).slice(0, n).map((d, i) => `${px(i)},${scaleY(d.y)}`).join(" ");
 
+  // gridlines (0, 50%, 100% do maxY)
   const grid = [0, 0.5, 1].map((f) => ({ y: scaleY(maxY * f), v: Math.round(maxY * f) }));
 
   return (
-    <div>
-      {(mainLabel || compareLabel) && (
-        <div className="flex gap-3 text-[10px] mb-1 font-mono">
-          {mainLabel && <span style={{ color }}>● {mainLabel}</span>}
-          {compareLabel && <span style={{ color: compareColor }}>● {compareLabel}</span>}
-        </div>
-      )}
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 200 }}>
-        {grid.map((g, i) => (
-          <g key={i}>
-            <line x1={pad} y1={g.y} x2={W - pad} y2={g.y} stroke="#e4eaef" strokeWidth="1" />
-            <text x={pad - 6} y={g.y + 3} textAnchor="end" fontSize="9" fill="#67757f">
-              {prefix}{g.v.toLocaleString("pt-BR")}
-            </text>
-          </g>
-        ))}
-        {compare && compare.length > 1 && (
-          <polyline points={cmpPts} fill="none" stroke={compareColor} strokeWidth="2.5" strokeDasharray="4 3" />
-        )}
-        {compare && compare.map((d, i) => (
-          i < n ? <circle key={`cmp-${i}`} cx={px(i)} cy={scaleY(d.y)} r="3" fill={compareColor} /> : null
-        ))}
-        {n > 1 && <polygon points={area} fill={color} opacity="0.12" />}
-        {n > 1 && <polyline points={pts} fill="none" stroke={color} strokeWidth="2.5" />}
-        {data.map((d, i) => (
-          <g key={i}>
-            <circle cx={px(i)} cy={scaleY(d.y)} r="3.5" fill={color} />
-            <text x={px(i)} y={scaleY(d.y) - 8} textAnchor="middle" fontSize="9" fill="#67757f">
-              {prefix}{d.y.toLocaleString("pt-BR")}
-            </text>
-            <text x={px(i)} y={H - pad + 14} textAnchor="middle" fontSize="8" fill="#67757f">
-              {d.x.replace(/^\d{4}-/, "")}
-            </text>
-          </g>
-        ))}
-      </svg>
-    </div>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 200 }}>
+      {grid.map((g, i) => (
+        <g key={i}>
+          <line x1={pad} y1={g.y} x2={W - pad} y2={g.y} stroke="#e4eaef" strokeWidth="1" />
+          <text x={pad - 6} y={g.y + 3} textAnchor="end" fontSize="9" fill="#67757f">
+            {g.v}
+          </text>
+        </g>
+      ))}
+      {n > 1 && <polygon points={area} fill={color} opacity="0.12" />}
+      {n > 1 && <polyline points={pts} fill="none" stroke={color} strokeWidth="2.5" />}
+      {data.map((d, i) => (
+        <g key={i}>
+          <circle cx={px(i)} cy={scaleY(d.y)} r="3.5" fill={color} />
+          <text x={px(i)} y={scaleY(d.y) - 8} textAnchor="middle" fontSize="9" fill="#67757f">
+            {d.y}
+          </text>
+          <text x={px(i)} y={H - pad + 14} textAnchor="middle" fontSize="8" fill="#67757f">
+            {d.x.replace(/^\d{4}-/, "")}
+          </text>
+        </g>
+      ))}
+    </svg>
   );
 }
