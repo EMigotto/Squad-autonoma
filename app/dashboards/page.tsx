@@ -10,6 +10,14 @@ interface Weekly {
   coverage: number;
   cost: number;
   first_pass_rate: number;
+  manual_cycle_days?: number;
+  manual_cost?: number;
+  saving?: number;
+  cum_cycle_days?: number;
+  cum_cost?: number;
+  cum_manual_cycle_days?: number;
+  cum_manual_cost?: number;
+  cum_saving?: number;
 }
 interface Summary {
   total_cards: number;
@@ -31,6 +39,7 @@ export default function DashboardsPage() {
   const [roi, setRoi] = useState<any | null>(null);
   const [roiWeekly, setRoiWeekly] = useState<{ week: string; saving: number }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [granularity, setGranularity] = useState<"week" | "day">("week");
 
   useEffect(() => {
     fetch("/api/projects")
@@ -50,6 +59,7 @@ export default function DashboardsPage() {
     const qs = new URLSearchParams({ scope });
     if (scope === "team" && teamId) qs.set("team_id", teamId);
     if (scope === "project" && projectId) qs.set("project_id", projectId);
+    qs.set("granularity", granularity);
     const res = await fetch(`/api/dashboard?${qs.toString()}`);
     const data = await res.json();
     setSummary(data.summary);
@@ -57,7 +67,7 @@ export default function DashboardsPage() {
     setRoi(data.roi ?? null);
     setRoiWeekly(data.roiWeekly ?? []);
     setLoading(false);
-  }, [scope, teamId, projectId]);
+  }, [scope, teamId, projectId, granularity]);
 
   const [backfilling, setBackfilling] = useState(false);
   const [backfillMsg, setBackfillMsg] = useState("");
@@ -232,33 +242,53 @@ export default function DashboardsPage() {
                 <div className="text-xs uppercase tracking-widest text-qa mb-3 font-mono">
                   // roi &amp; economia vs. desenvolvimento humano
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                  <Kpi label="Dias economizados" value={`${roi.days_saved}`} unit="dias" tone="text-development" />
-                  <Kpi label="Economia (saving)" value={`R$ ${roi.savings_money.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} unit="" tone="text-qa" />
-                  <Kpi label="Baseline humano" value={`R$ ${roi.baseline_cost_total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`} unit="" tone="text-planning" />
-                  <Kpi label="Custo do squad" value={`R$ ${roi.actual_cost_total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`} unit="" tone="text-discovery" />
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                  <Kpi label="Cycle time TOTAL (squad)" value={`${roi.cycle_days_total}`} unit="dias" tone="text-development" />
+                  <Kpi label="Lifecycle TOTAL (manual)" value={`${roi.baseline_days_total}`} unit="dias" tone="text-planning" />
+                  <Kpi label="Dias economizados" value={`${roi.days_saved}`} unit="dias" tone="text-qa" />
+                  <Kpi label="Custo manual (baseline)" value={`R$ ${roi.baseline_cost_total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`} unit="" tone="text-planning" />
+                  <Kpi label={`Economia (${roi.savings_pct}%)`} value={`R$ ${roi.savings_money.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`} unit="" tone="text-qa" />
                 </div>
+
+                {/* HERO: comparação lado a lado manual × vibe coding */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  <div className="border border-planning/40 bg-planning/5 p-4">
+                    <div className="text-[10px] uppercase tracking-widest text-planning font-mono mb-2">desenvolvimento manual (estimado)</div>
+                    <div className="text-3xl font-bold text-planning">{roi.manual_avg_days} <span className="text-sm font-normal">dias/feature</span></div>
+                    <div className="text-sm text-ink-300 mt-1">R$ {roi.manual_avg_cost.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} por feature · time de {roi.team_size_used} pessoas alocado o ciclo inteiro</div>
+                  </div>
+                  <div className="border border-qa/50 bg-qa/10 p-4">
+                    <div className="text-[10px] uppercase tracking-widest text-qa font-mono mb-2">vibe coding (squad de agentes)</div>
+                    <div className="text-3xl font-bold text-qa">{roi.squad_avg_days} <span className="text-sm font-normal">dias/feature</span></div>
+                    <div className="text-sm text-ink-300 mt-1">R$ {roi.squad_avg_cost.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} por feature · tokens + time alocado só durante o ciclo real</div>
+                    <div className="text-lg font-bold text-qa mt-2">⚡ {roi.speedup}× mais rápido · {roi.savings_pct}% mais barato</div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="text-xs text-ink-300 leading-relaxed">
                     Sobre <strong>{roi.features_considered}</strong> feature(s) concluída(s)
-                    {roi.via_loc > 0 && (
-                      <> — <strong>{roi.via_loc}</strong> medida(s) por LOC ({roi.loc_total.toLocaleString("pt-BR")} linhas)</>
-                    )}
-                    {roi.via_complexity > 0 && (
-                      <> {roi.via_loc > 0 ? "e" : "—"} <strong>{roi.via_complexity}</strong> por complexidade (S/M/L/XL)</>
-                    )}
-                    : um time humano levaria <strong>~{roi.baseline_days_total} dias-dev</strong>; o squad
-                    entregou em <strong>~{roi.cycle_days_total} dias</strong> de cycle time — saving de{" "}
-                    <strong className="text-qa">{roi.savings_pct}%</strong> no custo.
-                    <div className="mt-2 text-[10px] text-ink-500">
-                      Premissas em Settings → custos → "ROI · baseline humano": LOC/dev-dia, horas/dia,
-                      custo/hora e horas por tamanho (S/M/L/XL). Features sem LOC usam a complexidade (tag
-                      da feature ou o tamanho padrão). Baseline = esforço ÷ produtividade; dias-dev são úteis,
-                      cycle time é calendário.
+                    {roi.via_loc > 0 && <> — <strong>{roi.via_loc}</strong> por LOC ({roi.loc_total.toLocaleString("pt-BR")} linhas)</>}
+                    {roi.via_complexity > 0 && <> {roi.via_loc > 0 ? "e" : "—"} <strong>{roi.via_complexity}</strong> por complexidade (S/M/L/XL)</>}
+                    : um time humano levaria <strong>~{roi.baseline_days_total} dias</strong> de lifecycle a um custo de
+                    {" "}<strong>R$ {roi.baseline_cost_total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</strong>;
+                    o squad entregou em <strong>~{roi.cycle_days_total} dias</strong> a
+                    {" "}<strong>R$ {roi.actual_cost_total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}</strong>.
+                    <div className="mt-3 p-2 border border-qa/40 bg-qa/10">
+                      <div className="font-mono text-[10px] text-qa mb-1">// benefício de coleta antecipada (time-to-market)</div>
+                      <div className="text-[11px] text-ink-200">
+                        O squad libera em <strong>{roi.cycle_days_total} dias</strong> o que demoraria
+                        {" "}<strong>{roi.baseline_days_total} dias</strong> manualmente — são
+                        {" "}<strong className="text-qa">{roi.days_saved} dias</strong> de receita/learning antecipados.
+                        Cada dia adiantado é capacidade do time livre pra próxima iniciativa.
+                      </div>
                     </div>
                   </div>
-                  <ChartCard title="Saving por semana (R$)">
+                  <ChartCard title="Saving ACUMULADO (R$) — running sum">
                     <LineChart data={roiWeekly.map((w) => ({ x: w.week, y: w.saving }))} color="#1a8a4a" prefix="R$ " />
+                    <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
+                      cada ponto = soma de TODO o saving até essa data. linha sempre sobe (nunca cai com nova feature).
+                    </div>
                   </ChartCard>
                 </div>
 
@@ -321,19 +351,65 @@ export default function DashboardsPage() {
               </div>
             )}
 
-            {/* EVOLUÇÃO SEMANAL */}
+            {/* GRANULARIDADE */}
+            <div className="mt-6 mb-2 flex items-center gap-2 text-[11px] flex-wrap">
+              <span className="uppercase tracking-wider text-ink-400 font-mono">// granularidade</span>
+              {(["week", "day"] as const).map((g) => (
+                <button
+                  key={g}
+                  onClick={() => setGranularity(g)}
+                  className={`px-3 py-1 border font-mono ${
+                    granularity === g ? "border-ink-100 text-ink-100" : "border-ink-700 text-ink-400 hover:text-ink-100"
+                  }`}
+                >
+                  {g === "week" ? "por semana" : "por dia"}
+                </button>
+              ))}
+              <span className="text-[10px] text-ink-500 ml-2">
+                cycle time e custo usam <strong>média acumulada</strong> — estabilizam com mais dados, nunca caem por feature menor
+              </span>
+            </div>
+
+            {/* EVOLUÇÃO — comparativo manual × vibe coding (CUMULATIVO) */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <ChartCard title="Cycle time (dias) — semana a semana">
-                <LineChart data={weekly.map((w) => ({ x: w.week, y: w.cycle_days }))} color="#4F9DF7" />
+              <ChartCard title="Cycle time — vibe coding vs. manual (média acumulada, dias)">
+                <LineChart
+                  data={weekly.map((w) => ({ x: w.week, y: w.cum_cycle_days ?? w.cycle_days }))}
+                  color="#0086b8"
+                  compare={weekly.map((w) => ({ x: w.week, y: w.cum_manual_cycle_days ?? w.manual_cycle_days ?? 0 }))}
+                  compareColor="#a8730a"
+                  mainLabel="vibe coding (squad)"
+                  compareLabel="manual (estimado)"
+                />
+                <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
+                  média acumulada de TODAS as features até a data. a distância entre as linhas é o ganho de velocidade do vibe coding.
+                </div>
               </ChartCard>
               <ChartCard title="Taxa de aprovação na 1ª (%)">
                 <LineChart data={weekly.map((w) => ({ x: w.week, y: w.first_pass_rate }))} color="#5BD17B" max={100} />
+                <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
+                  % de etapas aprovadas de primeira em cada período. alto = qualidade da entrega do agente.
+                </div>
               </ChartCard>
               <ChartCard title="Cobertura de testes (%)">
                 <LineChart data={weekly.map((w) => ({ x: w.week, y: w.coverage }))} color="#C792EA" max={100} />
+                <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
+                  cobertura média do período, extraída do qa-report.md das features concluídas. 0 = artefato não trouxe a métrica.
+                </div>
               </ChartCard>
-              <ChartCard title="Custo médio por feature">
-                <LineChart data={weekly.map((w) => ({ x: w.week, y: w.cost }))} color="#F78C6C" prefix="R$ " />
+              <ChartCard title="Custo médio por feature — vibe coding vs. manual (acumulado)">
+                <LineChart
+                  data={weekly.map((w) => ({ x: w.week, y: w.cum_cost ?? w.cost }))}
+                  color="#7c3aed"
+                  compare={weekly.map((w) => ({ x: w.week, y: w.cum_manual_cost ?? w.manual_cost ?? 0 }))}
+                  compareColor="#a8730a"
+                  prefix="R$ "
+                  mainLabel="vibe coding (squad)"
+                  compareLabel="manual (estimado)"
+                />
+                <div className="text-[9px] text-ink-500 mt-1 font-mono leading-snug">
+                  R$ médio acumulado por feature. vibe coding = tokens + (cycle × time × R$/hora). manual = esforço × time × R$/hora.
+                </div>
               </ChartCard>
             </div>
           </>
@@ -370,18 +446,27 @@ function LineChart({
   color,
   max,
   prefix = "",
+  compare,
+  compareColor = "#a8730a",
+  mainLabel,
+  compareLabel,
 }: {
   data: { x: string; y: number }[];
   color: string;
   max?: number;
   prefix?: string;
+  compare?: { x: string; y: number }[];
+  compareColor?: string;
+  mainLabel?: string;
+  compareLabel?: string;
 }) {
   const W = 480, H = 180, pad = 30;
   if (data.length === 0)
     return <div className="text-xs text-ink-500 italic">sem dados</div>;
 
   const ys = data.map((d) => d.y);
-  const maxY = max ?? Math.max(1, ...ys) * 1.15;
+  const cys = (compare ?? []).map((d) => d.y);
+  const maxY = max ?? Math.max(1, ...ys, ...cys) * 1.15;
   const minY = 0;
   const n = data.length;
   const xStep = n > 1 ? (W - pad * 2) / (n - 1) : 0;
@@ -390,33 +475,44 @@ function LineChart({
 
   const pts = data.map((d, i) => `${px(i)},${scaleY(d.y)}`).join(" ");
   const area = `${pad},${H - pad} ${pts} ${px(n - 1)},${H - pad}`;
-
-  // gridlines (0, 50%, 100% do maxY)
+  const cmpPts = (compare ?? []).slice(0, n).map((d, i) => `${px(i)},${scaleY(d.y)}`).join(" ");
   const grid = [0, 0.5, 1].map((f) => ({ y: scaleY(maxY * f), v: Math.round(maxY * f) }));
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 200 }}>
-      {grid.map((g, i) => (
-        <g key={i}>
-          <line x1={pad} y1={g.y} x2={W - pad} y2={g.y} stroke="#e4eaef" strokeWidth="1" />
-          <text x={pad - 6} y={g.y + 3} textAnchor="end" fontSize="9" fill="#67757f">
-            {g.v}
-          </text>
-        </g>
-      ))}
-      {n > 1 && <polygon points={area} fill={color} opacity="0.12" />}
-      {n > 1 && <polyline points={pts} fill="none" stroke={color} strokeWidth="2.5" />}
-      {data.map((d, i) => (
-        <g key={i}>
-          <circle cx={px(i)} cy={scaleY(d.y)} r="3.5" fill={color} />
-          <text x={px(i)} y={scaleY(d.y) - 8} textAnchor="middle" fontSize="9" fill="#67757f">
-            {d.y}
-          </text>
-          <text x={px(i)} y={H - pad + 14} textAnchor="middle" fontSize="8" fill="#67757f">
-            {d.x.replace(/^\d{4}-/, "")}
-          </text>
-        </g>
-      ))}
-    </svg>
+    <div>
+      {(mainLabel || compareLabel) && (
+        <div className="flex gap-3 text-[10px] mb-1 font-mono">
+          {mainLabel && <span style={{ color }}>● {mainLabel}</span>}
+          {compareLabel && <span style={{ color: compareColor }}>● {compareLabel}</span>}
+        </div>
+      )}
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 200 }}>
+        {grid.map((g, i) => (
+          <g key={i}>
+            <line x1={pad} y1={g.y} x2={W - pad} y2={g.y} stroke="#e4eaef" strokeWidth="1" />
+            <text x={pad - 6} y={g.y + 3} textAnchor="end" fontSize="9" fill="#67757f">
+              {prefix}{g.v.toLocaleString("pt-BR")}
+            </text>
+          </g>
+        ))}
+        {compare && compare.length > 1 && (
+          <polyline points={cmpPts} fill="none" stroke={compareColor} strokeWidth="2.5" strokeDasharray="4 3" />
+        )}
+        {compare && compare.map((d, i) => (i < n ? <circle key={`c${i}`} cx={px(i)} cy={scaleY(d.y)} r="3" fill={compareColor} /> : null))}
+        {n > 1 && <polygon points={area} fill={color} opacity="0.12" />}
+        {n > 1 && <polyline points={pts} fill="none" stroke={color} strokeWidth="2.5" />}
+        {data.map((d, i) => (
+          <g key={i}>
+            <circle cx={px(i)} cy={scaleY(d.y)} r="3.5" fill={color} />
+            <text x={px(i)} y={scaleY(d.y) - 8} textAnchor="middle" fontSize="9" fill="#67757f">
+              {prefix}{d.y.toLocaleString("pt-BR")}
+            </text>
+            <text x={px(i)} y={H - pad + 14} textAnchor="middle" fontSize="8" fill="#67757f">
+              {d.x.replace(/^\d{4}-/, "")}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </div>
   );
 }
