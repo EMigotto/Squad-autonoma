@@ -36,6 +36,12 @@ export async function POST(req: Request) {
         );
       }
     }
+    if (typeof body.description === "string" && body.description.length > 3000) {
+      return NextResponse.json(
+        { error: "A descrição não pode passar de 3.000 caracteres." },
+        { status: 400 }
+      );
+    }
 
     // Resolve o projeto ativo
     const projectId = await getActiveProjectId(user.id);

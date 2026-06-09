@@ -117,6 +117,27 @@ async function handleSessionIdled(sessionId: string) {
     });
   }
 
+  // Detecta erros na execução (item 4): se houver, registra no chat com prefixo
+  // reconhecível pela UI e marca a stage_run. O humano pode pedir a correção.
+  const errorDetail = await detectSessionErrors(sessionId);
+  if (errorDetail) {
+    await sb.from("card_chat_messages").insert({
+      card_id: card.id,
+      session_id: sessionId,
+      role: "system",
+      content: `⚠ ERRO DETECTADO NA EXECUÇÃO:\n${errorDetail}\n\nA etapa NÃO foi concluída com sucesso. Revise o erro acima e clique em "pedir correção ao agente" (ou descreva o ajuste no chat) para o agente reprocessar esta etapa.`,
+    });
+    try {
+      await sb
+        .from("card_stage_runs")
+        .update({ summary: `⚠ com erros\n${summary ?? ""}` })
+        .eq("claude_session_id", sessionId)
+        .eq("status", "running");
+    } catch (e) {
+      console.error("[webhook] marcar stage_run com erro falhou", e);
+    }
+  }
+
   // Card só vai pra awaiting_review se ainda estiver running
   // (chat refining mantém running → idle → running ciclicamente)
   if (card.status === "running") {
@@ -196,6 +217,57 @@ function roleForStage(stage: string): string {
 }
 
 // Monta um worklog legível a partir dos eventos reais da sessão: o que o
+// Varre os eventos da sessão procurando sinais de erro na execução do agente.
+// Retorna um resumo dos erros encontrados, ou null se a execução foi limpa.
+// Sinais: tool_result com is_error, comandos que falharam, e padrões de texto
+// típicos de falha (Error:, Traceback, npm ERR!, "X failed", "FAIL ").
+async function detectSessionErrors(sessionId: string): Promise<string | null> {
+  try {
+    const hits: string[] = [];
+    let n = 0;
+    const errRe =
+      /(\bError\b|\bException\b|Traceback|npm ERR!|\bFAILED?\b|\bfailed\b|\bcannot\b|\bcould not\b|ENOENT|ECONNREFUSED|fatal:|panic:|Cannot find module|tsc.*error|TS\d{3,}|exit code [1-9])/;
+    for await (const ev of beta.sessions.events.list(sessionId)) {
+      n++;
+      if (n > 600) break;
+      const t = (ev as any).type as string;
+      // resultado de ferramenta marcado como erro
+      if (t === "agent.tool_result" || t === "tool_result") {
+        const isErr = (ev as any).is_error === true || (ev as any).status === "error";
+        if (isErr) {
+          const c = (ev as any).content;
+          const txt = typeof c === "string"
+            ? c
+            : Array.isArray(c)
+              ? c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("")
+              : "";
+          hits.push(`ferramenta falhou: ${(txt || "").slice(0, 300)}`);
+        }
+      }
+      // texto do agente / saída de comando com sinais de erro
+      const c = (ev as any).content;
+      const text = typeof c === "string"
+        ? c
+        : Array.isArray(c)
+          ? c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("")
+          : "";
+      if (text && errRe.test(text)) {
+        // pega a linha relevante do erro
+        const line = text.split("\n").find((l: string) => errRe.test(l)) || text;
+        const snippet = line.trim().slice(0, 240);
+        if (snippet && !hits.includes(snippet)) hits.push(snippet);
+      }
+    }
+    if (hits.length === 0) return null;
+    // dedup e limita
+    const uniq = Array.from(new Set(hits)).slice(0, 6);
+    return uniq.join("\n");
+  } catch (e) {
+    console.error("[webhook] detectSessionErrors falhou", e);
+    return null;
+  }
+}
+
 // agente fez (ferramentas usadas, arquivos tocados, comandos) + o desfecho.
 async function buildWorklog(sessionId: string): Promise<string | null> {
   try {

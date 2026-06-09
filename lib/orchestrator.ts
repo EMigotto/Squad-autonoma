@@ -201,10 +201,12 @@ async function getProjectContextBlock(
   const instr = project.instructions_path || "AGENTS.md";
   block += `Instructions file: ${instr}\n`;
   block +=
-    `Documentation language: ALL artifacts you create (PRD, ADR, acceptance ` +
-    `criteria, QA report, README sections, any .md files) MUST be written in ` +
-    `English. The UI provides on-demand Portuguese translation; do not write ` +
-    `in Portuguese.\n`;
+    `Documentation language: TODOS os artefatos que você criar (PRD, ADR, ` +
+    `critérios de aceite, relatório de QA, seções de README, qualquer arquivo ` +
+    `.md) DEVEM ser escritos em PORTUGUÊS DO BRASIL (pt-BR). O time da Cielo ` +
+    `revisa e edita esses documentos em português. NÃO escreva em inglês. ` +
+    `Comentários de código e nomes de variáveis podem seguir a convenção do ` +
+    `repositório, mas toda documentação em prosa é em pt-BR.\n`;
 
   if (isExisting) {
     block +=
@@ -966,7 +968,7 @@ export async function generateInfrastructureSummary(
 
   const sys =
     `You are an infrastructure architect summarizing what a delivered feature needs to run in production. ` +
-    `Output a single Markdown document in English with a stable structure suitable for downstream automation (an MCP-driven provisioner will read this).`;
+    `Output a single Markdown document written in PORTUGUÊS DO BRASIL (pt-BR), with a stable header structure suitable for downstream automation (an MCP-driven provisioner will read this — keep section headers consistent, prose in pt-BR).`;
 
   const userPrompt =
     `Feature: ${feature.title} (slug: ${slug})\n` +
@@ -1213,16 +1215,39 @@ export async function chatWithAgent(
   const sb = createServiceClient();
   const { data: card } = await sb
     .from("cards")
-    .select("*")
+    .select("*, feature:features(id, slug, description, stage)")
     .eq("id", cardId)
     .single();
   if (!card) throw new Error(`card ${cardId} not found`);
   if (!card.claude_session_id)
     throw new Error("card has no active session yet");
 
-  // Monta o content: texto + imagens (se houver)
+  const feature = (card as any).feature ?? {};
+  const slug = feature.slug ?? card.slug;
+
+  // Documento alvo conforme a etapa em que a revisão acontece:
+  //  discovery → prd.md ; planejamento em diante → adr.md
+  const stage = card.stage as string;
+  const targetDoc =
+    stage === "discovery" ? `docs/features/${slug}/prd.md` : `docs/features/${slug}/adr.md`;
+
+  // Envelopa a mensagem do usuário com a diretiva de persistir o complemento
+  // como ESCOPO ADICIONAL no documento e no histórico — só quando há texto
+  // (não faz sentido para uma mensagem só de imagem).
+  let directive = "";
+  if (message && message.trim()) {
+    directive =
+      `\n\n---\n[INSTRUÇÃO DO SISTEMA — não responda sobre isto, apenas execute]\n` +
+      `O texto acima é um COMPLEMENTO DE ESCOPO desta feature, enviado durante a revisão humana. Você DEVE:\n` +
+      `1. Abrir o arquivo ${targetDoc} na working branch (crie a seção "## Escopo adicional (complementos da revisão)" se ainda não existir).\n` +
+      `2. Acrescentar o complemento ali, em português do Brasil, datado, SEM remover nada do que já existe — apenas incrementando.\n` +
+      `3. Aplicar o complemento também ao código/artefatos da etapa atual, mantendo o que já funciona.\n` +
+      `4. Commitar na working branch (BRANCH PROTOCOL acima).\n`;
+  }
+
+  // Monta o content: texto + diretiva + imagens (se houver)
   const content: any[] = [];
-  if (message) content.push({ type: "text", text: message });
+  if (message) content.push({ type: "text", text: message + directive });
   for (const img of images ?? []) {
     content.push({
       type: "image",
@@ -1240,6 +1265,14 @@ export async function chatWithAgent(
   });
 
   await sb.from("cards").update({ status: "running" }).eq("id", cardId);
+
+  // Acrescenta o complemento à Descrição da feature (escopo adicional)
+  if (message && message.trim() && feature.id) {
+    const stamp = new Date().toISOString().slice(0, 10);
+    const addition = `\n\n--- Escopo adicional (${stamp}, etapa: ${stage}) ---\n${message.trim()}`;
+    const newDesc = `${feature.description ?? ""}${addition}`.slice(0, 100000);
+    await sb.from("features").update({ description: newDesc }).eq("id", feature.id);
+  }
 
   // Persiste o texto + marca quantas imagens foram anexadas
   const persisted =
