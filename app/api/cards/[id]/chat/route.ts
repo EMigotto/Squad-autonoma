@@ -72,49 +72,54 @@ export async function GET(
       .map((m: any) => String(m.content ?? "").trim())
   );
 
+  let sessionStuck = false;
   if (card?.claude_session_id) {
     try {
       const liveMsgs: any[] = [];
+      let internalErrors = 0;
       let n = 0;
       for await (const ev of beta.sessions.events.list(card.claude_session_id)) {
         n++;
         if (n > 400) break;
         const t = (ev as any).type as string;
-        if (t !== "agent.message") continue;
-        const c = (ev as any).content;
-        let text = "";
-        if (typeof c === "string") text = c;
-        else if (Array.isArray(c)) {
-          text = c.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("");
+        // Detecta o erro de buffer/serviço que trava a sessão
+        const c0 = (ev as any).content;
+        const text0 = typeof c0 === "string"
+          ? c0
+          : Array.isArray(c0)
+            ? c0.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("")
+            : "";
+        if (/internal service error|context.*too large|buffer|maximum context|too many tokens/i.test(text0) ||
+            (ev as any).error || t === "error" || t === "agent.error") {
+          internalErrors++;
         }
-        text = (text || "").trim();
-        if (!text) continue;
+        if (t !== "agent.message") continue;
+        const text = text0;
+        const clean = (text || "").trim();
+        if (!clean) continue;
         const ts = (ev as any).created_at ?? null;
         liveMsgs.push({
           id: `live-${(ev as any).id ?? n}`,
           card_id: params.id,
           session_id: card.claude_session_id,
           role: "agent",
-          content: text,
+          content: clean,
           created_at: ts ?? new Date().toISOString(),
           live: true,
         });
       }
-      // Só adiciona os que NÃO foram persistidos ainda (compara conteúdo)
       for (const lm of liveMsgs) {
-        if (!persistedContents.has(String(lm.content).trim())) {
-          messages.push(lm);
-        }
+        if (!persistedContents.has(String(lm.content).trim())) messages.push(lm);
       }
-      // Reordena por created_at
-      messages.sort((a, b) =>
-        String(a.created_at).localeCompare(String(b.created_at))
-      );
+      messages.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+
+      // Travada: há erros internos repetidos E nenhuma resposta de agente recente.
+      // (2+ erros é sinal forte de buffer estourado / serviço travado.)
+      if (internalErrors >= 2) sessionStuck = true;
     } catch (e) {
-      // best-effort — se a SDK não listar eventos, devolve só o persistido
       console.error("[chat GET] live merge falhou", e);
     }
   }
 
-  return NextResponse.json({ messages });
+  return NextResponse.json({ messages, session_stuck: sessionStuck });
 }

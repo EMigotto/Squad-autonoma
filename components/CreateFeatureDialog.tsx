@@ -217,17 +217,26 @@ export default function CreateFeatureDialog({
     key: keyof typeof form,
     label: string,
     placeholder: string,
-    multiline = false
+    multiline = false,
+    optional = false,
+    maxLength?: number
   ) {
     const Tag = multiline ? "textarea" : "input";
+    const val = String(form[key] ?? "");
     return (
       <div>
-        <label className="block text-xs uppercase tracking-widest text-ink-400 mb-1">
-          {label}
+        <label className="flex items-center justify-between text-xs uppercase tracking-widest text-ink-400 mb-1">
+          <span>{label}</span>
+          {maxLength && (
+            <span className={`normal-case tracking-normal ${val.length > maxLength ? "text-qa" : "text-ink-500"}`}>
+              {val.length.toLocaleString("pt-BR")}/{maxLength.toLocaleString("pt-BR")}
+            </span>
+          )}
         </label>
         <Tag
           {...({ type: multiline ? undefined : "text" } as any)}
-          required
+          {...(optional ? {} : { required: true })}
+          {...(maxLength ? { maxLength } : {})}
           value={form[key]}
           onChange={(e) => setForm({ ...form, [key]: e.target.value })}
           placeholder={placeholder}
@@ -277,7 +286,7 @@ export default function CreateFeatureDialog({
           <>
             {field("slug", "slug", "ex: dark-mode-toggle")}
             {field("title", "título", "ex: Dark mode no app")}
-            {field("description", "descrição", "O que precisa ser feito?", true)}
+            {field("description", "descrição", "O que precisa ser feito?", true, false, 3000)}
             <div>
               <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
                 aplicação
@@ -386,7 +395,9 @@ export default function CreateFeatureDialog({
             {field(
               "github_parent_issue",
               "parent issue # (opcional)",
-              "ex: 42"
+              "ex: 42 (deixe em branco se não houver)",
+              false,
+              true
             )}
 
             {/* Upload de HTMLs */}

@@ -497,6 +497,127 @@ export async function previewKickoff(
 }
 
 // ============================================================
+// recoverSession: cria uma sessão NOVA quando a atual travou
+// (buffer estourado / "internal service error"). Preserva o
+// contexto do projeto + resumo do que já foi feito e reenfileira
+// as mensagens do usuário que ficaram sem resposta.
+// ============================================================
+export async function recoverSession(
+  cardId: string,
+  reason = "sessão travada (erro interno / buffer)"
+): Promise<{ session_id: string }> {
+  const sb = createServiceClient();
+  const { data: card } = await sb
+    .from("cards")
+    .select("*")
+    .eq("id", cardId)
+    .single();
+  if (!card) throw new Error(`card ${cardId} not found`);
+  if (card.status === "done" || card.stage === "done")
+    throw new Error("card já concluído");
+
+  const stage = card.stage as StageCode;
+  const oldSession = card.claude_session_id as string | null;
+
+  const feature = await ensureFeatureEnvironment(card.feature_id);
+  const { def, deployed: currentDeployed } = await getAgentForStage(stage, feature.project_id);
+  const deployed = await resolveDeployedAgent(feature.project_id, def, currentDeployed, null);
+  const settings = await getAppSettings(feature.project_id);
+
+  // Resumo do que já foi feito (últimas mensagens do agente persistidas)
+  const { data: history } = await sb
+    .from("card_chat_messages")
+    .select("role, content, created_at")
+    .eq("card_id", cardId)
+    .order("created_at", { ascending: true });
+  const agentMsgs = (history ?? []).filter((m) => m.role === "agent");
+  const lastAgent = agentMsgs.length ? agentMsgs[agentMsgs.length - 1].content : "";
+
+  // Mensagens do usuário que vieram DEPOIS da última resposta do agente
+  // (provavelmente as que ficaram enfileiradas sem resposta) → reenfileira.
+  let pendingUser: string[] = [];
+  if (history && history.length) {
+    let lastAgentIdx = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === "agent") { lastAgentIdx = i; break; }
+    }
+    pendingUser = history
+      .slice(lastAgentIdx + 1)
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .filter(Boolean);
+  }
+
+  // Contexto: bloco do projeto + estado anterior + diretiva de continuidade
+  const projectBlock = await getProjectContextBlock(
+    feature.project_id, feature.repository_id, feature.environment_id,
+    feature.slug, feature.working_branch, feature.source_branch
+  );
+  const continuity =
+    `\n=== CONTINUAÇÃO DE SESSÃO (a sessão anterior foi reiniciada) ===\n` +
+    `Esta é a etapa "${stage}" da feature "${feature.title}" (slug: ${feature.slug}).\n` +
+    `A sessão anterior travou e foi recriada — o trabalho já feito está COMMITADO na working branch ` +
+    `e os documentos estão em docs/features/${feature.slug}/. NÃO recomece do zero: ` +
+    `leia o que já existe na branch e CONTINUE de onde parou.\n` +
+    (lastAgent ? `\nÚltimo progresso registrado:\n${String(lastAgent).slice(0, 1500)}\n` : "") +
+    `===\n`;
+
+  const kickoff = defaultKickoff({ ...card, stage }, feature, [], settings);
+  let userMsg = `${projectBlock}\n${continuity}\n${kickoff}`;
+  if (pendingUser.length) {
+    userMsg +=
+      `\n\n=== MENSAGENS PENDENTES DO HUMANO (responda/aplique estas) ===\n` +
+      pendingUser.map((m, i) => `${i + 1}. ${m}`).join("\n") +
+      `\n===\n`;
+  }
+
+  // Cria a nova sessão
+  const session = await beta.sessions.create({
+    agent: deployed.claude_agent_id,
+    environment_id: feature.claude_environment_id,
+    title: `${feature.slug} · ${stage} (recuperada)`,
+  });
+  await beta.sessions.events.send(session.id, {
+    events: [{ type: "user.message", content: [{ type: "text", text: userMsg }] }],
+  });
+
+  // Aponta o card pra nova sessão
+  await sb
+    .from("cards")
+    .update({ claude_session_id: session.id, status: "running" })
+    .eq("id", cardId);
+
+  // Fecha a stage_run antiga e abre uma nova
+  if (oldSession) {
+    await sb
+      .from("card_stage_runs")
+      .update({ status: "failed", summary: `⚠ ${reason} — sessão recriada` })
+      .eq("claude_session_id", oldSession)
+      .eq("status", "running");
+  }
+  await sb.from("card_stage_runs").insert({
+    card_id: cardId,
+    stage,
+    agent_role: def.role,
+    claude_session_id: session.id,
+    status: "running",
+    model: def.model,
+  });
+
+  await sb.from("card_chat_messages").insert({
+    card_id: cardId,
+    session_id: session.id,
+    role: "system",
+    content:
+      `♻ Sessão recriada automaticamente (${reason}). O agente retoma de onde parou` +
+      (pendingUser.length ? `, reprocessando ${pendingUser.length} mensagem(ns) pendente(s).` : ".") +
+      ` O trabalho commitado na branch foi preservado.`,
+  });
+
+  return { session_id: session.id };
+}
+
+// ============================================================
 // startStage: cria sessão pro stage atual do card
 // ============================================================
 export async function startStage(

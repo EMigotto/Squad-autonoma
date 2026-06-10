@@ -74,6 +74,8 @@ export default function CardDetailPanel({
     loading: true,
   });
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [recovering, setRecovering] = useState(false);
+  const recoveringRef = useRef(false);
   const [showTransition, setShowTransition] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -96,7 +98,31 @@ export default function CardDetailPanel({
   const [metrics, setMetrics] = useState<any>(null);
   const [currency, setCurrency] = useState("BRL");
   const [stageBreakdown, setStageBreakdown] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<"details" | "chat">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "chat" | "files">("details");
+  const [repoTree, setRepoTree] = useState<{
+    loading: boolean;
+    branch?: string;
+    files: { path: string; name: string; ext: string; size: number }[];
+    error?: string;
+    loaded: boolean;
+  }>({ loading: false, files: [], loaded: false });
+
+  async function loadRepoTree() {
+    setRepoTree((s) => ({ ...s, loading: true }));
+    try {
+      const res = await fetch(`/api/cards/${cardId}/repo-tree`);
+      const data = await res.json();
+      setRepoTree({
+        loading: false,
+        branch: data.branch,
+        files: data.tree ?? [],
+        error: data.error,
+        loaded: true,
+      });
+    } catch (e) {
+      setRepoTree({ loading: false, files: [], error: String(e), loaded: true });
+    }
+  }
 
   async function loadMetrics() {
     try {
@@ -177,6 +203,26 @@ export default function CardDetailPanel({
     if (res.ok) {
       const data = await res.json();
       setChatHistory(data.messages ?? []);
+      // Auto-recuperação: se a sessão travou (buffer/erro interno) e ainda não
+      // tentamos recriar, dispara a recriação automática uma única vez.
+      if (data.session_stuck && !recoveringRef.current) {
+        recoveringRef.current = true;
+        setRecovering(true);
+        try {
+          await fetch(`/api/cards/${cardId}/recover-session`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reason: "buffer da sessão estourou (detecção automática)" }),
+          });
+          await loadChatHistory();
+        } catch {
+          /* deixa o usuário tentar manualmente */
+        } finally {
+          setRecovering(false);
+          // libera nova tentativa após 60s (evita loop se persistir)
+          setTimeout(() => { recoveringRef.current = false; }, 60000);
+        }
+      }
     }
   }
 
@@ -207,7 +253,7 @@ export default function CardDetailPanel({
   }
 
   async function openFile(file: ArtifactFile) {
-    const branch = file.branch ?? artifacts.branch ?? "main";
+    const branch = file.branch ?? artifacts.branch ?? repoTree.branch ?? "main";
     setOpenArtifact({
       path: file.path,
       name: file.name,
@@ -491,7 +537,24 @@ export default function CardDetailPanel({
                 <span className="w-1.5 h-1.5 rounded-full bg-development animate-pulse" />
               )}
             </button>
+            <button
+              onClick={() => { setActiveTab("files"); loadRepoTree(); }}
+              className={`px-5 py-2.5 text-xs uppercase tracking-widest border-b-2 transition-colors ${
+                activeTab === "files"
+                  ? "border-development text-ink-100"
+                  : "border-transparent text-ink-400 hover:text-ink-200"
+              }`}
+            >
+              arquivos
+            </button>
           </div>
+
+          {activeTab === "files" && (
+            <RepoFileBrowser
+              tree={repoTree}
+              onOpenFile={(path, name, branch) => openFile({ path, name, branch } as ArtifactFile)}
+            />
+          )}
 
           {activeTab === "details" && (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
@@ -710,6 +773,12 @@ export default function CardDetailPanel({
 
           {activeTab === "chat" && (
             <div className="flex-1 flex flex-col min-h-0 p-5">
+              {recovering && (
+                <div className="mb-3 px-3 py-2 border border-planning/60 bg-planning/10 text-[11px] text-planning font-mono flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-planning animate-pulse" />
+                  sessão travou (buffer/erro interno) — recriando automaticamente e retomando de onde parou…
+                </div>
+              )}
               {chatTabAvailable ? (
                 <AgentChat
                   cardId={cardId}
@@ -2127,7 +2196,16 @@ function AgentChat({
             </div>
           )}
           {visibleMessages.map((msg) => (
-            <ChatBubble key={msg.id} message={msg} agentName={agentName} />
+            <ChatBubble
+              key={msg.id}
+              message={msg}
+              agentName={agentName}
+              onRequestFix={(errText) => {
+                setInput(
+                  `O agente reportou o seguinte erro na última execução:\n\n${errText}\n\nPor favor, corrija esse erro e refaça a etapa. Não altere o que já está funcionando.`
+                );
+              }}
+            />
           ))}
           {busy && (
             <div className="flex items-center gap-2 text-[11px] text-development">
@@ -2270,12 +2348,48 @@ function AgentChat({
 function ChatBubble({
   message,
   agentName,
+  onRequestFix,
 }: {
   message: ChatMessage;
   agentName?: string | null;
+  onRequestFix?: (errText: string) => void;
 }) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+  const isError = isSystem && message.content.startsWith("⚠ ERRO");
+  if (isError) {
+    const ts = new Date(message.created_at).toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    // tira o prefixo e a instrução final pra extrair só o erro pro botão
+    const body = message.content.replace(/^⚠ ERRO DETECTADO NA EXECUÇÃO:\n?/, "");
+    const errOnly = body.split("\n\nA etapa NÃO foi concluída")[0].trim();
+    return (
+      <div className="border border-planning/60 bg-planning/10 p-3 text-[11px]">
+        <div className="flex items-center justify-between mb-1">
+          <span className="font-mono text-planning font-semibold uppercase tracking-wide">
+            ⚠ erro na execução
+          </span>
+          <span className="text-ink-500 font-mono">{ts}</span>
+        </div>
+        <div className="whitespace-pre-wrap leading-snug text-ink-200 font-mono text-[10px] bg-ink-950 border border-ink-700 p-2 overflow-x-auto">
+          {errOnly}
+        </div>
+        <div className="mt-2 text-ink-300">
+          A etapa não foi concluída com sucesso. Peça a correção:
+        </div>
+        {onRequestFix && (
+          <button
+            onClick={() => onRequestFix(errOnly)}
+            className="mt-2 px-3 py-1.5 bg-planning text-white font-mono text-[11px] hover:opacity-90"
+          >
+            ↻ pedir correção ao agente
+          </button>
+        )}
+      </div>
+    );
+  }
   if (isSystem) {
     const ts = new Date(message.created_at).toLocaleTimeString("pt-BR", {
       hour: "2-digit",
@@ -2318,6 +2432,94 @@ function ChatBubble({
         >
           {message.content}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Navegador de arquivos do repo (árvore completa da working branch).
+// Agrupa por pasta e permite abrir qualquer arquivo gerado pelos agentes.
+function RepoFileBrowser({
+  tree,
+  onOpenFile,
+}: {
+  tree: {
+    loading: boolean;
+    branch?: string;
+    files: { path: string; name: string; ext: string; size: number }[];
+    error?: string;
+    loaded: boolean;
+  };
+  onOpenFile: (path: string, name: string, branch?: string) => void;
+}) {
+  const [filter, setFilter] = useState("");
+
+  if (tree.loading)
+    return <div className="p-6 text-xs text-ink-400 italic">carregando árvore do repositório…</div>;
+  if (tree.error)
+    return <div className="p-6 text-xs text-qa">erro ao listar arquivos: {tree.error}</div>;
+  if (!tree.files.length)
+    return <div className="p-6 text-xs text-ink-400 italic">nenhum arquivo encontrado nesta branch.</div>;
+
+  const q = filter.trim().toLowerCase();
+  const files = q
+    ? tree.files.filter((f) => f.path.toLowerCase().includes(q))
+    : tree.files;
+
+  // agrupa por diretório
+  const byDir: Record<string, typeof files> = {};
+  for (const f of files) {
+    const dir = f.path.includes("/") ? f.path.split("/").slice(0, -1).join("/") : "(raiz)";
+    (byDir[dir] = byDir[dir] || []).push(f);
+  }
+  const dirs = Object.keys(byDir).sort();
+
+  const icon = (ext: string) => {
+    if (ext === "md") return "📄";
+    if (ext === "html" || ext === "htm") return "🌐";
+    if (ext === "docx" || ext === "doc") return "📝";
+    if (ext === "fig") return "🎨";
+    if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "🖼";
+    if (["ts", "tsx", "js", "jsx", "py", "go", "java", "rb", "css", "json"].includes(ext)) return "⟨⟩";
+    return "•";
+  };
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto p-3">
+      <div className="flex items-center justify-between mb-2 gap-2">
+        <span className="text-[11px] font-mono text-ink-400">
+          // arquivos do repo {tree.branch && <>· branch <strong className="text-ink-200">{tree.branch}</strong></>} · {tree.files.length}
+        </span>
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="filtrar por nome/caminho…"
+          className="bg-ink-900 border border-ink-700 px-2 py-1 text-xs text-ink-100 focus:border-discovery focus:outline-none w-48"
+        />
+      </div>
+      <div className="space-y-3">
+        {dirs.map((dir) => (
+          <div key={dir}>
+            <div className="text-[10px] uppercase tracking-wider text-ink-500 font-mono mb-1">{dir}/</div>
+            <div className="space-y-0.5">
+              {byDir[dir].map((f) => (
+                <button
+                  key={f.path}
+                  onClick={() => onOpenFile(f.path, f.name, tree.branch)}
+                  className="w-full text-left flex items-center gap-2 px-2 py-1 text-xs text-ink-200 hover:bg-ink-800 border border-transparent hover:border-ink-700"
+                >
+                  <span className="shrink-0 w-4 text-center text-ink-400">{icon(f.ext)}</span>
+                  <span className="truncate">{f.name}</span>
+                  {f.size > 0 && (
+                    <span className="ml-auto shrink-0 text-[10px] text-ink-500 font-mono">
+                      {f.size > 1024 ? `${(f.size / 1024).toFixed(0)}kb` : `${f.size}b`}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
