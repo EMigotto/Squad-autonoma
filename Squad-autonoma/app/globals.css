@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code",
+    Menlo, monospace;
+}
+
+html,
+body {
+  font-family: var(--font-mono);
+  font-feature-settings: "ss01", "cv05", "cv09";
+  letter-spacing: -0.01em;
+  background: #ffffff;
+  color: #0a2733;
+}
+
+/* Scrollbars: subtle, dark */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cfd8e0;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #aeb9c4;
+}
+
+/* Selection */
+::selection {
+  background: #00AEEF;
+  color: #ffffff;
+}
+
+/* Focus ring — sharp, no rounded blur */
+*:focus-visible {
+  outline: 1px solid #00AEEF;
+  outline-offset: 2px;
+}
+
+/* Cards: superfície clara com leve profundidade (tema Cielo) */
+.card-surface {
+  background: linear-gradient(
+    180deg,
+    rgba(10, 39, 51, 0.015) 0%,
+    rgba(10, 39, 51, 0) 100%
+  );
+  background-color: #ffffff;
+  border-color: #e4eaef;
+}
