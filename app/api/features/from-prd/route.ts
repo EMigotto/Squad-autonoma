@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveProjectId } from "@/lib/projects";
-import { createFeature, chatWithAgent } from "@/lib/orchestrator";
+import { createFeature } from "@/lib/orchestrator";
+import { createServiceClient } from "@/lib/supabase/server";
 import { anthropic } from "@/lib/claude";
 
 export const runtime = "nodejs";
@@ -66,19 +67,8 @@ export async function POST(req: Request) {
         source_branch: body.source_branch,
         created_by: user.id,
       });
-      // semente: PRD original + diretiva de uso (e protótipos valem pra todas)
-      try {
-        await chatWithAgent(
-          card_id,
-          `[SEMENTE — PRD ORIGINAL FORNECIDO PELO PM HUMANO]\n` +
-          `Este PRD cobre um conjunto de features; ESTA feature é: "${it.title}".\n` +
-          `1. Salve o PRD original em docs/features/${it.slug}/prd-original.md (íntegro).\n` +
-          `2. Crie docs/features/${it.slug}/prd.md PARTINDO do trecho relevante deste PRD para esta ` +
-          `feature — enriqueça, não recomece. Se houver protótipos anexados, eles se aplicam a todas as ` +
-          `features deste PRD; referencie-os.\n\n---\n${prd.slice(0, 60000)}`,
-          user.id
-        );
-      } catch { /* sessão pode demorar a nascer; o PM ainda recebe via descrição */ }
+      // semente: grava o PRD na feature — o startStage injeta no kickoff do Discovery
+      await createServiceClient().from("features").update({ seed_prd: prd }).eq("id", feature_id);
       created.push({ feature_id, card_id, slug: it.slug, title: it.title });
     }
     return NextResponse.json({ created, count: created.length });

@@ -35,8 +35,9 @@ interface Props {
   };
 }
 
-const STAGE_ORDER = ["discovery", "planning", "development", "qa", "done"];
+const STAGE_ORDER = ["backlog", "discovery", "planning", "development", "qa", "done"];
 const NEXT_STAGE: Record<string, string> = {
+  backlog: "discovery",
   discovery: "planning",
   planning: "development",
   development: "qa",
@@ -192,6 +193,7 @@ export default function Board({
   // colapsados aqui. Se o card mais avançado está cancelled, a feature inteira
   // conta como cancelada.
   const STAGE_RANK: Record<string, number> = {
+    backlog: -1,
     discovery: 0,
     planning: 1,
     development: 2,

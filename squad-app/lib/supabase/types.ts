@@ -1,4 +1,5 @@
 export type StageCode =
+  | "backlog"
   | "discovery"
   | "planning"
   | "development"

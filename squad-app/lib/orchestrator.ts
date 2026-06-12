@@ -11,6 +11,7 @@ import { BUILTIN_AGENTS, buildClaudeSpec, hashPrompt } from "@/lib/agents";
 import type { StageCode } from "@/lib/supabase/types";
 
 const NEXT_STAGE: Record<StageCode, StageCode> = {
+  backlog: "discovery",
   discovery: "planning",
   planning: "development",
   development: "qa",
@@ -472,7 +473,15 @@ export async function previewKickoff(
     settings
   );
   const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug, feature.working_branch, feature.source_branch);
-  const initial_message = projectBlock ? `${projectBlock}\n${baseMsg}` : baseMsg;
+  let initial_message = projectBlock ? `${projectBlock}\n${baseMsg}` : baseMsg;
+  if ((feature as any).seed_prd) {
+    initial_message +=
+      `\n\n=== SEMENTE — PRD ORIGINAL FORNECIDO PELO PM HUMANO ===\n` +
+      `1. Salve o PRD original ÍNTEGRO em docs/features/${feature.slug}/prd-original.md.\n` +
+      `2. Crie o prd.md PARTINDO do trecho relevante para ESTA feature — enriqueça, não recomece. ` +
+      `Protótipos anexados (se houver) se aplicam a todas as features deste PRD.\n---\n` +
+      String((feature as any).seed_prd).slice(0, 60000) + `\n===\n`;
+  }
 
   // Resolve a branch alvo (mesma prioridade da diretiva injetada)
   let envBranch: string | null = null;
@@ -1817,6 +1826,7 @@ export async function completeCardEarly(
 // Ex: voltar de development pra planning ("Refinamento Técnico")
 // ============================================================
 const ALL_STAGES: StageCode[] = [
+  "backlog",
   "discovery",
   "planning",
   "development",
@@ -2147,8 +2157,8 @@ export async function createFeature(input: {
     .from("cards")
     .insert({
       feature_id: feature.id,
-      stage: "discovery",
-      status: "queued",
+      stage: "backlog",
+      status: "awaiting_review",
     })
     .select("id")
     .single();

@@ -282,7 +282,7 @@ export default function CreateFeatureDialog({
           <div className="border border-qa bg-qa/5 p-3 text-sm text-qa">
             <div className="font-semibold mb-1">feature criada ✓</div>
             <div className="text-xs opacity-80">
-              PM Agent disparado com os protótipos anexados. Atualizando…
+              Criada no BACKLOG (sem disparo). Mova para Discovery para iniciar os agentes.
             </div>
           </div>
         )}
@@ -292,9 +292,9 @@ export default function CreateFeatureDialog({
             {/* stepper do wizard */}
             <div className="grid grid-cols-3 gap-2 mb-4">
               {[
-                { n: 1, t: "O quê", d: "título e descrição" },
+                { n: 1, t: "Anexos", d: "PRD.md e protótipos (desmembra sozinho)" },
                 { n: 2, t: "Onde", d: "aplicação · ambiente · branch" },
-                { n: 3, t: "Anexos & disparo", d: "protótipos e docs" },
+                { n: 3, t: "O quê & disparo", d: "título/descrição (dispensado com PRD)" },
               ].map((p) => (
                 <button
                   key={p.n}
@@ -313,10 +313,10 @@ export default function CreateFeatureDialog({
               ))}
             </div>
 
-            <div className={wstep === 1 ? "space-y-4" : "hidden"}>
-            {field("slug", "slug", "ex: dark-mode-toggle")}
-            {field("title", "título", "ex: Dark mode no app")}
-            {field("description", "descrição", "O que precisa ser feito?", true, false, 3000)}
+            <div className={wstep === 3 ? "space-y-4" : "hidden"}>
+            {field("slug", "slug", prdContent ? "(dispensado — virá do PRD)" : "ex: dark-mode-toggle", false, !!prdContent)}
+            {field("title", "título", prdContent ? "(dispensado — virá do PRD)" : "ex: Dark mode no app", false, !!prdContent)}
+            {field("description", "descrição", prdContent ? "(dispensada — virá do PRD)" : "O que precisa ser feito?", true, !!prdContent, 3000)}
             </div>
 
             <div className={wstep === 2 ? "space-y-4" : "hidden"}>
@@ -434,7 +434,7 @@ export default function CreateFeatureDialog({
             )}
             </div>
 
-            <div className={wstep === 3 ? "space-y-4" : "hidden"}>
+            <div className={wstep === 1 ? "space-y-4" : "hidden"}>
             {/* PRD.md semente (opcional) — desmembra em VÁRIAS features */}
             <div className="border border-development/40 bg-development/5 rounded-card p-3">
               <label className="block text-xs uppercase tracking-widest text-development mb-1">
@@ -589,7 +589,7 @@ export default function CreateFeatureDialog({
                 ? files.length > 0
                   ? "fazendo upload..."
                   : "criando..."
-                : "criar e disparar PM Agent →"}
+                : prdContent ? "desmembrar PRD e criar features no backlog →" : "criar feature no backlog →"}
             </button>
             )}
             </div>

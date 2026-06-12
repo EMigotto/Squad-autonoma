@@ -133,7 +133,7 @@ export async function POST(req: Request) {
       }
 
       // 3. AGORA dispara o PM Agent (que vai ler os anexos)
-      await kickoffFirstStage(result.card_id);
+      // Backlog: criação NÃO dispara agente. O fluxo inicia ao mover p/ Discovery.
 
       return NextResponse.json(result);
     } catch (e) {
