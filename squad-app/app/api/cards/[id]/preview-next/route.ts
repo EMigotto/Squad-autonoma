@@ -5,6 +5,7 @@ import { previewKickoff } from "@/lib/orchestrator";
 export const runtime = "nodejs";
 
 const NEXT: Record<string, string> = {
+  backlog: "discovery",
   discovery: "planning",
   planning: "development",
   development: "qa",
