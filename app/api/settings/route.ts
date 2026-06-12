@@ -23,13 +23,17 @@ export async function GET() {
     .limit(1)
     .maybeSingle();
 
-  // Se o projeto ainda não tem settings, cria um registro default
+  // Se o projeto ainda não tem settings, cria um registro default (upsert
+  // atômico — evita corrida e o conflito de PK singleton legado).
   if (!data && projectId) {
     const { data: created } = await svc
       .from("app_settings")
-      .insert({ project_id: projectId, default_base_branch: "main" })
+      .upsert(
+        { project_id: projectId, default_base_branch: "main" },
+        { onConflict: "project_id" }
+      )
       .select("*")
-      .single();
+      .maybeSingle();
     data = created;
   }
 
@@ -89,22 +93,29 @@ export async function PUT(req: Request) {
 
   const svc = createServiceClient();
 
-  // Upsert por projeto
-  const { data: existing } = await svc
+  // Upsert ATÔMICO por projeto (evita corrida entre o GET que cria a linha
+  // default e o PATCH; e o erro de PK singleton legado id=1).
+  let { error } = await svc
     .from("app_settings")
-    .select("id")
-    .eq("project_id", projectId)
-    .limit(1)
-    .maybeSingle();
+    .upsert(patch, { onConflict: "project_id" });
 
-  let error;
-  if (existing) {
-    ({ error } = await svc
+  // Fallback: bases ainda com a PK antiga (id=1) podem recusar o upsert por
+  // project_id. Nesse caso, tenta update direto; se não existir, insert.
+  if (error) {
+    const { data: existing } = await svc
       .from("app_settings")
-      .update(patch)
-      .eq("project_id", projectId));
-  } else {
-    ({ error } = await svc.from("app_settings").insert(patch));
+      .select("id")
+      .eq("project_id", projectId)
+      .limit(1)
+      .maybeSingle();
+    if (existing) {
+      ({ error } = await svc
+        .from("app_settings")
+        .update(patch)
+        .eq("project_id", projectId));
+    } else {
+      ({ error } = await svc.from("app_settings").insert(patch));
+    }
   }
 
   if (error) {

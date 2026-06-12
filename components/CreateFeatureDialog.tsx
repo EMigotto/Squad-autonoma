@@ -53,6 +53,7 @@ export default function CreateFeatureDialog({
   const [prdName, setPrdName] = useState<string>("");
   const [stack, setStack] = useState<string>("");
   const [success, setSuccess] = useState(false);
+  const [successMsg, setSuccessMsg] = useState("");
 
   useEffect(() => {
     fetch("/api/projects/repos")
@@ -207,11 +208,18 @@ export default function CreateFeatureDialog({
         setSubmitting(false);
         return;
       }
+      const okJson = await res.json().catch(() => ({}));
+      if (prdContent && typeof okJson.count === "number") {
+        setSuccessMsg(
+          `PRD desmembrado em ${okJson.count} feature(s), criadas no Backlog.` +
+          (okJson.errors?.length ? ` (${okJson.errors.length} com aviso)` : "")
+        );
+      }
       setSuccess(true);
       setTimeout(() => {
         onClose();
         window.location.reload();
-      }, 1500);
+      }, 1800);
     } catch (err) {
       setError(stringifyError(err));
       setSubmitting(false);
@@ -280,9 +288,13 @@ export default function CreateFeatureDialog({
 
         {success && (
           <div className="border border-qa bg-qa/5 p-3 text-sm text-qa">
-            <div className="font-semibold mb-1">feature criada ✓</div>
+            <div className="font-semibold mb-1">
+              {successMsg ? "PRD desmembrado ✓" : "feature criada ✓"}
+            </div>
             <div className="text-xs opacity-80">
-              Criada no BACKLOG (sem disparo). Mova para Discovery para iniciar os agentes.
+              {successMsg
+                ? `${successMsg} Mova cada card para Discovery para iniciar os agentes.`
+                : "Criada no BACKLOG (sem disparo). Mova para Discovery para iniciar os agentes."}
             </div>
           </div>
         )}

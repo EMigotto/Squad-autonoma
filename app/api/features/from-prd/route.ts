@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getActiveProjectId } from "@/lib/projects";
 import { createFeature } from "@/lib/orchestrator";
-import { createServiceClient } from "@/lib/supabase/server";
 import { anthropic } from "@/lib/claude";
 
 export const runtime = "nodejs";
@@ -25,10 +24,41 @@ export async function POST(req: Request) {
     const body = await req.json();
     const prd = String(body.prd_content ?? "").trim();
     if (!prd) return NextResponse.json({ error: "prd_content obrigatório" }, { status: 400 });
-    if (!body.github_repo) return NextResponse.json({ error: "github_repo obrigatório" }, { status: 400 });
 
     const projectId = await getActiveProjectId(user.id);
     if (!projectId) return NextResponse.json({ error: "nenhum time ativo" }, { status: 400 });
+
+    // Resolve o repositório (igual ao /api/features): repository_id informado →
+    // primeiro repo do projeto → github_repo do projeto. O form NÃO envia
+    // github_repo preenchido (o repo é escolhido por repository_id).
+    const svc = createServiceClient();
+    let githubRepo: string | undefined;
+    let repositoryId: string | undefined = body.repository_id;
+    if (repositoryId) {
+      const { data: repo } = await svc
+        .from("project_repositories")
+        .select("github_repo")
+        .eq("id", repositoryId)
+        .maybeSingle();
+      githubRepo = repo?.github_repo;
+    } else {
+      const { data: repo } = await svc
+        .from("project_repositories")
+        .select("id, github_repo")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (repo) { repositoryId = repo.id; githubRepo = repo.github_repo; }
+    }
+    if (!githubRepo) {
+      const { data: project } = await svc
+        .from("projects").select("github_repo").eq("id", projectId).maybeSingle();
+      githubRepo = project?.github_repo ?? body.github_repo;
+    }
+    if (!githubRepo) {
+      return NextResponse.json({ error: "projeto sem repositório configurado" }, { status: 400 });
+    }
 
     // 1) Desmembra o PRD em features via Claude (JSON estrito)
     const resp: any = await anthropic.messages.create({
@@ -53,25 +83,39 @@ export async function POST(req: Request) {
 
     // 2-3) Cria cada feature e injeta a semente do PRD na sessão de Discovery
     const created: any[] = [];
+    const errors: string[] = [];
     for (const it of items.slice(0, 8)) {
-      const { feature_id, card_id } = await createFeature({
-        slug: it.slug,
-        title: it.title,
-        description: it.description,
-        github_repo: body.github_repo,
-        github_parent_issue: Number(body.github_parent_issue) || 0,
-        project_id: projectId,
-        repository_id: body.repository_id,
-        environment_id: body.environment_id,
-        working_branch: body.working_branch,
-        source_branch: body.source_branch,
-        created_by: user.id,
-      });
-      // semente: grava o PRD na feature — o startStage injeta no kickoff do Discovery
-      await createServiceClient().from("features").update({ seed_prd: prd }).eq("id", feature_id);
-      created.push({ feature_id, card_id, slug: it.slug, title: it.title });
+      try {
+        const safeSlug = String(it.slug || it.title || "feature")
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "feature";
+        const { feature_id, card_id } = await createFeature({
+          slug: safeSlug,
+          title: it.title || safeSlug,
+          description: it.description || "(derivado do PRD)",
+          github_repo: githubRepo!,
+          github_parent_issue: Number(body.github_parent_issue) || 0,
+          project_id: projectId,
+          repository_id: repositoryId,
+          environment_id: body.environment_id,
+          working_branch: body.working_branch,
+          source_branch: body.source_branch,
+          created_by: user.id,
+        });
+        // semente: grava o PRD na feature — o startStage injeta no kickoff do Discovery
+        await svc.from("features").update({ seed_prd: prd }).eq("id", feature_id);
+        created.push({ feature_id, card_id, slug: safeSlug, title: it.title });
+      } catch (e) {
+        errors.push(`${it.slug ?? it.title}: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
-    return NextResponse.json({ created, count: created.length });
+    if (created.length === 0) {
+      return NextResponse.json(
+        { error: `nenhuma feature criada. ${errors.join(" | ")}` },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json({ created, count: created.length, errors });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
