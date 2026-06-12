@@ -49,6 +49,8 @@ export default function CreateFeatureDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>("");
   const [wstep, setWstep] = useState(1);
+  const [prdContent, setPrdContent] = useState<string>("");
+  const [prdName, setPrdName] = useState<string>("");
   const [stack, setStack] = useState<string>("");
   const [success, setSuccess] = useState(false);
 
@@ -175,7 +177,8 @@ export default function CreateFeatureDialog({
     try {
       const attachmentPaths = files.length > 0 ? await uploadAll() : [];
 
-      const res = await fetch("/api/features", {
+      const endpoint = prdContent ? "/api/features/from-prd" : "/api/features";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -194,6 +197,7 @@ export default function CreateFeatureDialog({
             parseInt(form.github_parent_issue, 10) || 0,
           attachment_paths: attachmentPaths,
           attachment_filenames: files.map((f) => f.file.name),
+          prd_content: prdContent || undefined,
         }),
       });
       if (!res.ok) {
@@ -431,6 +435,37 @@ export default function CreateFeatureDialog({
             </div>
 
             <div className={wstep === 3 ? "space-y-4" : "hidden"}>
+            {/* PRD.md semente (opcional) — desmembra em VÁRIAS features */}
+            <div className="border border-development/40 bg-development/5 rounded-card p-3">
+              <label className="block text-xs uppercase tracking-widest text-development mb-1">
+                PRD.md (opcional) — desmembrar em múltiplas features
+              </label>
+              <p className="text-[11px] text-ink-400 mb-2">
+                Se você já tem um PRD, anexe aqui: a app interpreta o documento, cria
+                <b className="text-ink-200"> uma feature por escopo identificado</b> (todas em Discovery),
+                injeta o PRD como semente em cada uma e mantém os protótipos referenciados em todas.
+                Sem PRD anexado, o PM Agent gera o prd.md normalmente.
+              </p>
+              <input
+                type="file"
+                accept=".md,text/markdown,text/plain"
+                disabled={success}
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  if (!f) { setPrdContent(""); setPrdName(""); return; }
+                  const txt = await f.text();
+                  setPrdContent(txt);
+                  setPrdName(f.name);
+                }}
+                className="text-[11px] text-ink-300"
+              />
+              {prdName && (
+                <div className="mt-2 text-[11px] font-mono text-qa">
+                  ✓ {prdName} ({(prdContent.length / 1000).toFixed(1)}k chars) — será desmembrado em features
+                  <button type="button" onClick={() => { setPrdContent(""); setPrdName(""); }} className="ml-2 text-ink-400 hover:text-ink-100">×</button>
+                </div>
+              )}
+            </div>
             {/* Upload de HTMLs */}
             <div>
               <label className="block text-xs uppercase tracking-widest text-ink-400 mb-1">

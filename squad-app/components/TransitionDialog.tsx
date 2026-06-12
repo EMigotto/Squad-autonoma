@@ -59,7 +59,7 @@ export default function TransitionDialog({
       .catch(() => {});
   }, []);
 
-  const reinforcedOk = !reinforced || confirmText.trim().toUpperCase() === "APROVAR";
+  const reinforcedOk = !reinforced || ["APROVAR","APROVADO","APROVO"].includes(confirmText.trim().toUpperCase());
 
   // Detecta se o último merge reportou conflitos
   const hasConflicts = /conflict/i.test(mergeResult);

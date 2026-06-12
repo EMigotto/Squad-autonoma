@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { moveCardToStage } from "@/lib/orchestrator";
+import { recomputeCardMetrics } from "@/lib/metrics";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -24,6 +25,7 @@ export async function POST(
       return NextResponse.json({ error: "stage required" }, { status: 400 });
     }
 
+    const isDone = body?.stage === "done" || body?.target_stage === "done";
     await moveCardToStage(
       params.id,
       targetStage,
