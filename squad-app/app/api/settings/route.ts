@@ -67,6 +67,8 @@ export async function PUT(req: Request) {
     "require_reinforced_review",
     "sensitive_paths",
     "teams_command_token",
+    "infra_mcp_url",
+    "infra_mcp_token",
     "teams_chat_link",
     "baseline_loc_per_dev_day",
     "baseline_hours_per_day",

@@ -377,6 +377,18 @@ export default function Board({
 
         <div className="flex items-center gap-2">
           <Link
+            href="/infra"
+            className="text-xs uppercase tracking-widest text-development hover:text-ink-100 px-3 py-1.5"
+          >
+            infra
+          </Link>
+          <Link
+            href="/onboarding"
+            className="text-xs uppercase tracking-widest text-qa hover:text-ink-100 px-3 py-1.5"
+          >
+            🧭 app legada
+          </Link>
+          <Link
             href="/manual"
             className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100 px-3 py-1.5"
           >

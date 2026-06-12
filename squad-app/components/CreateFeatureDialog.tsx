@@ -48,6 +48,7 @@ export default function CreateFeatureDialog({
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>("");
+  const [wstep, setWstep] = useState(1);
   const [stack, setStack] = useState<string>("");
   const [success, setSuccess] = useState(false);
 
@@ -284,9 +285,37 @@ export default function CreateFeatureDialog({
 
         {!success && (
           <>
+            {/* stepper do wizard */}
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {[
+                { n: 1, t: "O quê", d: "título e descrição" },
+                { n: 2, t: "Onde", d: "aplicação · ambiente · branch" },
+                { n: 3, t: "Anexos & disparo", d: "protótipos e docs" },
+              ].map((p) => (
+                <button
+                  key={p.n}
+                  type="button"
+                  onClick={() => setWstep(p.n)}
+                  className={`text-left border rounded-card p-2.5 transition-colors ${
+                    wstep === p.n ? "border-qa/60 bg-qa/10" : "border-ink-700 bg-ink-900/50 hover:border-ink-600"
+                  }`}
+                >
+                  <div className={`font-mono text-[9px] tracking-[.14em] uppercase ${wstep === p.n ? "text-qa" : "text-ink-500"}`}>
+                    passo {p.n} {wstep > p.n && "✓"}
+                  </div>
+                  <div className="text-[12px] text-ink-100 font-semibold">{p.t}</div>
+                  <div className="text-[10px] text-ink-400">{p.d}</div>
+                </button>
+              ))}
+            </div>
+
+            <div className={wstep === 1 ? "space-y-4" : "hidden"}>
             {field("slug", "slug", "ex: dark-mode-toggle")}
             {field("title", "título", "ex: Dark mode no app")}
             {field("description", "descrição", "O que precisa ser feito?", true, false, 3000)}
+            </div>
+
+            <div className={wstep === 2 ? "space-y-4" : "hidden"}>
             <div>
               <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
                 aplicação
@@ -399,7 +428,9 @@ export default function CreateFeatureDialog({
               false,
               true
             )}
+            </div>
 
+            <div className={wstep === 3 ? "space-y-4" : "hidden"}>
             {/* Upload de HTMLs */}
             <div>
               <label className="block text-xs uppercase tracking-widest text-ink-400 mb-1">
@@ -468,6 +499,7 @@ export default function CreateFeatureDialog({
                 </div>
               )}
             </div>
+            </div>
           </>
         )}
 
@@ -485,7 +517,7 @@ export default function CreateFeatureDialog({
         )}
 
         {!success && (
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-between gap-2 pt-2">
             <button
               type="button"
               onClick={onClose}
@@ -493,6 +525,26 @@ export default function CreateFeatureDialog({
             >
               cancelar
             </button>
+            <div className="flex gap-2">
+            {wstep > 1 && (
+              <button
+                type="button"
+                onClick={() => setWstep(wstep - 1)}
+                className="px-3 py-1.5 text-sm border border-ink-600 text-ink-300 hover:text-ink-100 rounded-card"
+              >
+                ← voltar
+              </button>
+            )}
+            {wstep < 3 && (
+              <button
+                type="button"
+                onClick={() => setWstep(wstep + 1)}
+                className="bg-qa text-ink-950 px-4 py-1.5 text-sm font-semibold rounded-card hover:opacity-90"
+              >
+                avançar →
+              </button>
+            )}
+            {wstep === 3 && (
             <button
               type="submit"
               disabled={submitting}
@@ -504,6 +556,8 @@ export default function CreateFeatureDialog({
                   : "criando..."
                 : "criar e disparar PM Agent →"}
             </button>
+            )}
+            </div>
           </div>
         )}
       </form>
