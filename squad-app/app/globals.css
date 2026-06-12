@@ -5,6 +5,13 @@
 :root {
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code",
     Menlo, monospace;
+  --cielo-blue: #00aeef;
+  --cielo-navy: #00263a;
+  --ink: #0a2733;
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --shadow-soft: 0 1px 2px rgba(10, 39, 51, 0.05), 0 4px 16px rgba(10, 39, 51, 0.06);
+  --shadow-lift: 0 2px 6px rgba(10, 39, 51, 0.08), 0 16px 40px rgba(10, 39, 51, 0.12);
+  --ring: rgba(0, 174, 239, 0.35);
 }
 
 html,
@@ -12,45 +19,177 @@ body {
   font-family: var(--font-mono);
   font-feature-settings: "ss01", "cv05", "cv09";
   letter-spacing: -0.01em;
-  background: #ffffff;
-  color: #0a2733;
+  color: var(--ink);
+  /* fundo branco com mesh sutil de gradientes Cielo — profundidade sem ruído */
+  background:
+    radial-gradient(1100px 500px at 85% -10%, rgba(0, 174, 239, 0.06), transparent 60%),
+    radial-gradient(900px 420px at -10% 30%, rgba(0, 38, 58, 0.045), transparent 55%),
+    radial-gradient(700px 380px at 50% 110%, rgba(26, 138, 74, 0.04), transparent 60%),
+    #ffffff;
+  background-attachment: fixed;
 }
 
-/* Scrollbars: subtle, dark */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* ---------- movimento global: entradas suaves ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  main, .card-surface, [class*="ChartCard"] {
+    animation: rise-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes rise-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
 }
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+
+/* Scrollbars finas e elegantes */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: #cfd8e0;
+  background: linear-gradient(180deg, #cfd8e0, #b9c6d1);
   border-radius: 4px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: #aeb9c4;
-}
+::-webkit-scrollbar-thumb:hover { background: #9fb0bd; }
 
 /* Selection */
-::selection {
-  background: #00AEEF;
-  color: #ffffff;
-}
+::selection { background: var(--cielo-blue); color: #ffffff; }
 
-/* Focus ring — sharp, no rounded blur */
+/* Focus ring com glow suave */
 *:focus-visible {
-  outline: 1px solid #00AEEF;
+  outline: 1px solid var(--cielo-blue);
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--ring);
+  transition: box-shadow 0.15s ease;
 }
 
-/* Cards: superfície clara com leve profundidade (tema Cielo) */
+/* ---------- superfícies ---------- */
+/* Cards: vidro claro com profundidade e hover-lift */
 .card-surface {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 251, 253, 0.9));
+  -webkit-backdrop-filter: blur(8px) saturate(1.15);
+  backdrop-filter: blur(8px) saturate(1.15);
+  border: 1px solid rgba(10, 39, 51, 0.08);
+  box-shadow: var(--shadow-soft);
+  transition:
+    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.22s ease;
+  will-change: transform;
+}
+.card-surface:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lift);
+  border-color: rgba(0, 174, 239, 0.28);
+}
+
+/* Botões: micro-interações universais */
+button {
+  transition:
+    transform 0.16s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.16s ease,
+    background-color 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    opacity 0.16s ease;
+}
+button:not(:disabled):hover { transform: translateY(-1px); }
+button:not(:disabled):active { transform: translateY(0) scale(0.985); }
+
+/* Inputs refinados */
+input, textarea, select {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+input:focus, textarea:focus, select:focus {
+  box-shadow: 0 0 0 4px var(--ring);
+}
+
+/* ---------- header / faixa da marca ---------- */
+.brand-band {
+  position: relative;
+  overflow: hidden;
+}
+.brand-band::after {
+  /* brilho diagonal animado, sutil, atravessando a faixa navy */
+  content: "";
+  position: absolute;
+  inset: 0;
   background: linear-gradient(
-    180deg,
-    rgba(10, 39, 51, 0.015) 0%,
-    rgba(10, 39, 51, 0) 100%
+    105deg,
+    transparent 0%,
+    transparent 42%,
+    rgba(0, 174, 239, 0.16) 50%,
+    transparent 58%,
+    transparent 100%
   );
-  background-color: #ffffff;
-  border-color: #e4eaef;
+  background-size: 240% 100%;
+  animation: band-sheen 9s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes band-sheen {
+  0%, 55% { background-position: 120% 0; }
+  85%, 100% { background-position: -120% 0; }
+}
+
+/* chip de versão com pulso de "deploy vivo" */
+.version-chip {
+  position: relative;
+  box-shadow: 0 0 0 0 rgba(0, 174, 239, 0.4);
+  animation: chip-pulse 4.5s ease-out infinite;
+}
+@keyframes chip-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(0, 174, 239, 0.35); }
+  35% { box-shadow: 0 0 0 7px rgba(0, 174, 239, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 174, 239, 0); }
+}
+
+/* ---------- kanban ---------- */
+/* coluna: vidro com topo realçado */
+.kanban-column {
+  background: linear-gradient(180deg, rgba(244, 248, 251, 0.85), rgba(240, 245, 249, 0.65));
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(10, 39, 51, 0.07);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+/* card sendo arrastado */
+.dragging {
+  transform: rotate(1.5deg) scale(1.03);
+  box-shadow: var(--shadow-lift);
+  cursor: grabbing;
+}
+
+/* badge "aguarda você" com respiração */
+.gate-badge {
+  animation: gate-breathe 2.6s ease-in-out infinite;
+}
+@keyframes gate-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ---------- skeleton de carregamento (shimmer) ---------- */
+.skeleton {
+  background: linear-gradient(90deg, #eef3f7 25%, #f7fafc 37%, #eef3f7 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.3s ease infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* ---------- detalhes finos ---------- */
+/* divisor com gradiente */
+.divider-soft {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(10, 39, 51, 0.14), transparent);
+  border: 0;
+}
+
+/* números tabulares em métricas */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* aparição em cascata para listas (use com style={{animationDelay}}) */
+.stagger-in {
+  opacity: 0;
+  animation: rise-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }

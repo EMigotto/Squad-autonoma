@@ -25,7 +25,7 @@ export default function Column({ stage, cards, currentUser, onCardClick }: Props
   return (
     <div
       ref={setNodeRef}
-      className={`w-80 shrink-0 flex flex-col bg-ink-900/40 border ${
+      className={`kanban-column w-80 shrink-0 flex flex-col border ${
         isOver ? "border-ink-100" : "border-ink-700"
       } transition-colors`}
     >

@@ -1249,7 +1249,7 @@ function KnowledgeSection() {
     setOnboarding(true); setMsg("");
     const res = await fetch("/api/projects/onboard", { method: "POST" });
     const data = await res.json();
-    setMsg(res.ok ? "agente de onboarding disparado — acompanhe o PR de instruções no GitHub." : `erro: ${data.error}`);
+    setMsg(res.ok ? "agente arqueólogo disparado — ele vai gerar a Base de Conhecimento Arquitetural em docs/arquitetura/ (commits direto na branch base, só documentos)." : `erro: ${data.error}`);
     setOnboarding(false);
   }
 
@@ -1268,7 +1268,7 @@ function KnowledgeSection() {
         disabled={onboarding}
         className="mb-4 border border-development text-development px-3 py-1.5 text-xs hover:bg-development/10 disabled:opacity-50"
       >
-        {onboarding ? "disparando agente…" : "🔍 mapear repositório e gerar instruções (app existente)"}
+        {onboarding ? "disparando agente…" : "🧭 mapear repositório → Base de Conhecimento Arquitetural"}
       </button>
       {msg && <div className="text-[11px] text-ink-300 mb-3 font-mono">{msg}</div>}
 

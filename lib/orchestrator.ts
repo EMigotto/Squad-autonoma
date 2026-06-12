@@ -218,13 +218,24 @@ async function getProjectContextBlock(
 
   if (isExisting) {
     block +=
-      `\nThis is an EXISTING codebase. Before changing anything:\n` +
-      `- Read ${instr} (if present) and the knowledge base below.\n` +
-      `- Match the existing architecture, conventions, naming and patterns. Do NOT ` +
-      `re-architect or introduce new frameworks without explicit instruction.\n` +
-      `- Prefer the smallest change that satisfies the requirement. Keep public ` +
-      `contracts/APIs backward compatible unless told otherwise.\n` +
-      `- If the change affects build/deploy/migrations, call it out explicitly.\n`;
+      `\n=== APLICAÇÃO LEGADA — LEITURA OBRIGATÓRIA ANTES DE QUALQUER TRABALHO ===\n` +
+      `Este é um codebase EXISTENTE. ANTES de alterar qualquer coisa:\n` +
+      `1. Leia ${instr} na raiz (se existir) — é o contrato operacional dos agentes.\n` +
+      `2. Leia TODOS os arquivos de docs/arquitetura/ (se existirem): ARQUITETURA.md, ` +
+      `STACK-TECNICA.md, CONVENCOES.md, MAPA-MODULOS.md, GLOSSARIO-DOMINIO.md, AREAS-DE-RISCO.md. ` +
+      `Eles descrevem o estilo arquitetural, as tecnologias e versões, os padrões REAIS do código ` +
+      `e as áreas de risco. Seu trabalho DEVE seguir esses padrões à risca.\n` +
+      `3. Consulte MAPA-MODULOS.md antes de tocar em um módulo: se o risco do módulo for ALTO, ` +
+      `descreva a mudança pretendida no seu resumo e peça confirmação humana antes de mexer.\n` +
+      `4. NUNCA introduza framework/biblioteca/padrão novo sem justificar no ADR da feature, ` +
+      `citando o que existe hoje em STACK-TECNICA.md.\n` +
+      `5. Imite arquitetura, convenções, nomenclatura e padrões existentes. NÃO refatore código ` +
+      `fora do escopo nem "modernize" nada por iniciativa própria. Prefira a menor mudança que ` +
+      `atende o requisito; mantenha contratos/APIs públicos compatíveis salvo instrução contrária.\n` +
+      `6. Se a mudança afetar build/deploy/migrations, destaque isso explicitamente.\n` +
+      `Se docs/arquitetura/ ainda NÃO existir, registre no seu resumo final que o time deve rodar ` +
+      `o onboarding do repositório (Settings → aplicação → "mapear repositório").\n` +
+      `===\n`;
   } else {
     block +=
       `\nThis is a NEW codebase. If ${instr} does not exist yet, CREATE it as you go, ` +
@@ -804,26 +815,44 @@ export async function onboardProject(projectId: string): Promise<{ session_id: s
   const base = project.default_base_branch || "main";
 
   const prompt =
-    `You are ONBOARDING an existing codebase so future AI agents can work on it ` +
-    `safely. Repository: ${project.github_repo} (${project.app_kind ?? "application"}).\n\n` +
-    `STEPS:\n` +
-    `1. Clone the repo.\n` +
-    `2. Explore the structure: entry points, modules/services, build & test commands, ` +
-    `config, dependencies, data layer, external integrations.\n` +
-    `3. Create/update '${instr}' at the repo root documenting, concisely: overview & ` +
-    `purpose, architecture and main modules, tech stack, how to build/test/run, coding ` +
-    `conventions, branching/PR rules, and known gotchas. This file is the contract ` +
-    `future agents must follow.\n` +
-    `4. Also create docs/ONBOARDING.md with a deeper map (per-module responsibilities, ` +
-    `key flows, where to add things) and a list of risky areas to touch carefully.\n` +
-    `5. Open a branch 'chore/onboarding-instructions' from '${base}' and a PR with these files.\n` +
-    `6. End your turn with: a summary of the architecture you found, the build/test ` +
-    `commands, and the top 5 things a new contributor must know.\n\n` +
-    `--- GitHub credentials ---\n` +
+    `=== IDIOMA OBRIGATÓRIO: PORTUGUÊS DO BRASIL (pt-BR) — toda resposta, narração e documento ===\n\n` +
+    `Você é o AGENTE ARQUEÓLOGO DE CÓDIGO. Sua missão: mapear COMPLETAMENTE este repositório ` +
+    `legado para que agentes de IA futuros trabalhem nele com segurança, seguindo os padrões ` +
+    `existentes sem quebrar nada. Repositório: ${project.github_repo} (${project.app_kind ?? "aplicação"}).\n\n` +
+    `Gere a BASE DE CONHECIMENTO ARQUITETURAL — um conjunto de arquivos .md em docs/arquitetura/ ` +
+    `— investigando o código de verdade (não invente; tudo deve vir do que você LEU no repo):\n\n` +
+    `1. docs/arquitetura/ARQUITETURA.md — visão macro: estilo arquitetural (monólito, ` +
+    `camadas, hexagonal, microsserviços...), diagrama em texto/mermaid dos módulos e como se ` +
+    `comunicam, fluxos principais de ponta a ponta (request → resposta), pontos de entrada.\n` +
+    `2. docs/arquitetura/STACK-TECNICA.md — linguagens e versões, frameworks, bibliotecas-chave ` +
+    `e PARA QUE cada uma é usada no projeto, banco de dados, mensageria, infra, CI/CD.\n` +
+    `3. docs/arquitetura/CONVENCOES.md — padrões REAIS observados no código: nomenclatura, ` +
+    `organização de pastas, padrão de erros, logging, testes (framework, onde ficam, como rodar), ` +
+    `injeção de dependência, estilo de commits. COM EXEMPLOS copiados do próprio código.\n` +
+    `4. docs/arquitetura/MAPA-MODULOS.md — tabela: módulo/pasta | responsabilidade | depende de | ` +
+    `quem o usa | risco ao mexer (alto/médio/baixo) | testes existentes.\n` +
+    `5. docs/arquitetura/GLOSSARIO-DOMINIO.md — termos de negócio encontrados no código ` +
+    `(entidades, status, siglas) e o que significam.\n` +
+    `6. docs/arquitetura/AREAS-DE-RISCO.md — código frágil, acoplamentos perigosos, partes sem ` +
+    `teste, gambiarras conhecidas, o que NUNCA tocar sem aprovação humana.\n` +
+    `7. ${instr} (na raiz) — o CONTRATO operacional dos agentes: build/test/run, regras de branch, ` +
+    `convenções resumidas, e a instrução de SEMPRE ler docs/arquitetura/ antes de qualquer tarefa. ` +
+    `Atualize-o se já existir (preserve seções manuais).\n\n` +
+    `MÉTODO DE INVESTIGAÇÃO (faça nesta ordem):\n` +
+    `a. Clone e liste a árvore. Identifique manifestos (package.json, pom.xml, etc.), CI, Docker.\n` +
+    `b. Leia os pontos de entrada e siga os fluxos principais.\n` +
+    `c. Amostre 2-3 arquivos representativos por módulo para extrair convenções REAIS.\n` +
+    `d. Rode os comandos de build/teste para CONFIRMAR que documentou os comandos certos.\n` +
+    `e. Só então escreva os documentos.\n\n` +
+    `REGRAS: todos os documentos em pt-BR. Commite TUDO diretamente na branch '${base}' ` +
+    `(estes são apenas documentos — não altere NENHUM código). NÃO abra PR. ` +
+    `Encerre com: resumo da arquitetura encontrada, comandos de build/teste confirmados, e as ` +
+    `5 coisas mais importantes que um novo contribuidor (humano ou IA) precisa saber.\n\n` +
+    `--- Credenciais GitHub ---\n` +
     `Repo: ${project.github_repo}\nToken: ${token}\n` +
     `Clone URL: https://x-access-token:${token}@github.com/${project.github_repo}.git\n` +
-    `API auth header: Authorization: token ${token}\nBase branch: ${base}\n---\n` +
-    `Disable git commit signing with -c commit.gpgsign=false. Set a git identity.`;
+    `API auth header: Authorization: token ${token}\nBranch base: ${base}\n---\n` +
+    `Desabilite assinatura de commit com -c commit.gpgsign=false. Configure identidade git.`;
 
   const sessionId = await runProjectAgentSession(projectId, `onboarding · ${project.name}`, prompt);
   await sb.from("projects").update({ onboarded_at: new Date().toISOString() }).eq("id", projectId);

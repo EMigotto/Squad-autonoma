@@ -303,7 +303,7 @@ export default function Board({
     <div className="min-h-screen flex flex-col">
       <AssistantFAB />
       {/* Faixa de marca Cielo */}
-      <div className="bg-[#00263A] text-white px-6 py-2 flex items-center justify-between">
+      <div className="brand-band bg-[#00263A] text-white px-6 py-2 flex items-center justify-between">
         <div className="font-mono text-base tracking-tight flex items-center gap-1.5">
           <span className="text-[#A6CE39]">{"{"}</span>
           <span className="font-bold">V.AI</span>
@@ -313,7 +313,7 @@ export default function Board({
         </div>
         <div className="flex items-center gap-3 text-[11px]">
           <span className="text-white/60">esteira autônoma de engenharia</span>
-          <span className="font-mono bg-white/10 border border-white/15 px-2 py-0.5 rounded-full text-white/90">
+          <span className="version-chip font-mono bg-white/10 border border-white/15 px-2 py-0.5 rounded-full text-white/90">
             v{APP_VERSION}
           </span>
         </div>
