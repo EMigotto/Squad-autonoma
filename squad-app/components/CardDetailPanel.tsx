@@ -163,7 +163,9 @@ export default function CardDetailPanel({
       .select(
         `*,
          feature:features (id, slug, title, description, github_repo,
-                          current_stage, claude_environment_id, github_parent_issue),
+                          current_stage, claude_environment_id, github_parent_issue,
+                          working_branch, source_branch, environment_id, repository_id,
+                          selection_meta),
          human_gates (id, summary, decision, decision_reason, assignee_id, created_at)`
       )
       .eq("id", cardId)
@@ -570,6 +572,9 @@ export default function CardDetailPanel({
 
           {activeTab === "details" && (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            {/* O que foi selecionado na criação (auditoria) */}
+            <SelectionSummary feature={feature} />
+
             {/* Indicadores do card */}
             <MetricsPanel metrics={metrics} currency={currency} onSave={saveMetric} />
 
@@ -2540,6 +2545,49 @@ function RepoFileBrowser({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// Seção que registra o que foi selecionado na criação da feature:
+// repositório, branch de trabalho, branch de origem, ambiente, se é app nova etc.
+function SelectionSummary({ feature }: { feature: any }) {
+  if (!feature) return null;
+  const meta = feature.selection_meta ?? {};
+  const repo = feature.github_repo ?? meta.github_repo ?? "—";
+  const working = feature.working_branch ?? meta.working_branch ?? null;
+  const source = feature.source_branch ?? meta.source_branch ?? null;
+  const isNewBranch = meta.is_new_branch ?? (!!working && !!source);
+  const parent = feature.github_parent_issue ?? meta.github_parent_issue ?? null;
+
+  const rows: Array<[string, React.ReactNode]> = [
+    ["repositório", <span className="font-mono text-development">{repo}</span>],
+    ["branch de trabalho", working
+      ? <span className="font-mono text-ink-100">{working} {isNewBranch && <span className="text-qa">(nova)</span>}</span>
+      : <span className="text-ink-500">padrão do ambiente</span>],
+    ["branch de origem", source ? <span className="font-mono text-ink-200">{source}</span> : <span className="text-ink-500">—</span>],
+    ["parent issue", parent ? <span className="font-mono text-ink-200">#{parent}</span> : <span className="text-ink-500">nenhuma</span>],
+  ];
+
+  return (
+    <div className="border border-ink-700 rounded-card bg-ink-900/50 p-4">
+      <div className="font-mono text-[10px] tracking-[.15em] uppercase text-ink-400 mb-3">
+        // seleção registrada na criação
+      </div>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2.5">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex flex-col">
+            <span className="text-[10px] uppercase tracking-wider text-ink-500">{k}</span>
+            <span className="text-[13px] mt-0.5">{v}</span>
+          </div>
+        ))}
+      </div>
+      {isNewBranch && (
+        <div className="mt-3 text-[11px] text-ink-400 border-t border-ink-700 pt-2">
+          A branch de trabalho <span className="font-mono text-ink-200">{working}</span> será criada a partir de{" "}
+          <span className="font-mono text-ink-200">{source}</span> quando o primeiro agente rodar.
+        </div>
+      )}
     </div>
   );
 }

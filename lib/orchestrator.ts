@@ -53,6 +53,38 @@ async function getAppSettings(projectId?: string) {
  * Inclui: tipo de aplicação (nova/existente), stack, arquivo de instruções e a
  * base de conhecimento. É o que faz os agentes respeitarem o legado existente.
  */
+
+// Resolve a identidade Git que os agentes usam para escrever no repo.
+// Best practice: token fine-grained POR USUÁRIO (escopo mínimo contents:write),
+// guardado server-side. Cai para o GITHUB_TOKEN global se o usuário não
+// configurou a própria identidade.
+async function resolveGitIdentity(
+  creatorUserId?: string | null
+): Promise<{ token: string; username: string; email: string; source: string }> {
+  const globalToken = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
+  if (creatorUserId) {
+    try {
+      const sb = createServiceClient();
+      const { data } = await sb
+        .from("user_git_identity")
+        .select("git_username, git_email, git_token")
+        .eq("user_id", creatorUserId)
+        .maybeSingle();
+      if (data?.git_token && data.git_username) {
+        return {
+          token: data.git_token,
+          username: data.git_username,
+          email: data.git_email || `${data.git_username}@users.noreply.github.com`,
+          source: "usuário",
+        };
+      }
+    } catch (e) {
+      console.error("[resolveGitIdentity] falhou, usando token global", e);
+    }
+  }
+  return { token: globalToken, username: "squad-bot", email: "squad-bot@users.noreply.github.com", source: "global" };
+}
+
 async function getProjectContextBlock(
   projectId?: string,
   repositoryId?: string,
@@ -466,9 +498,12 @@ export async function previewKickoff(
   const attachments = await fetchAttachmentContents(card.feature_id);
   const settings = await getAppSettings(feature.project_id);
 
+  // Identidade Git de quem criou a feature (token por usuário com fallback global)
+  const gitId = await resolveGitIdentity((feature as any).created_by);
+
   const baseMsg = defaultKickoff(
     { ...card, stage: targetStage },
-    feature,
+    { ...feature, __gitId: gitId } as any,
     attachments,
     settings
   );
@@ -2146,9 +2181,21 @@ export async function createFeature(input: {
   const sb = createServiceClient();
   const normalizedSlug = normalizeSlug(input.slug);
 
+  // Registra o que foi selecionado, para auditoria/exibição no card
+  const selection_meta = {
+    github_repo: input.github_repo,
+    repository_id: input.repository_id ?? null,
+    environment_id: input.environment_id ?? null,
+    working_branch: input.working_branch ?? null,
+    source_branch: input.source_branch ?? null,
+    is_new_branch: !!(input.working_branch && input.source_branch),
+    github_parent_issue: input.github_parent_issue || null,
+    created_at: new Date().toISOString(),
+  };
+
   const { data: feature, error: fErr } = await sb
     .from("features")
-    .insert({ ...input, slug: normalizedSlug })
+    .insert({ ...input, slug: normalizedSlug, selection_meta })
     .select("id")
     .single();
   if (fErr || !feature) throw fErr ?? new Error("failed to create feature");
@@ -2540,7 +2587,12 @@ function chunkKickoff(
     default_base_branch: string;
   }
 ): string {
-  const token = process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
+  const gitId = (feature as any).__gitId as
+    | { token: string; username: string; email: string; source: string }
+    | undefined;
+  const token = gitId?.token ?? process.env.GITHUB_TOKEN ?? "(GITHUB_TOKEN_NOT_SET)";
+  const gitUser = gitId?.username ?? "squad-bot";
+  const gitEmail = gitId?.email ?? "squad-bot@users.noreply.github.com";
   const [owner, repo] = feature.github_repo.split("/");
 
   const credBlock =
@@ -2550,6 +2602,9 @@ function chunkKickoff(
     `Token: ${token}\n` +
     `Clone URL: https://x-access-token:${token}@github.com/${feature.github_repo}.git\n` +
     `API auth header: Authorization: token ${token}\n` +
+    `Identidade git para os commits (configure ANTES de commitar):\n` +
+    `  git config user.name "${gitUser}"\n` +
+    `  git config user.email "${gitEmail}"\n` +
     `Default base branch: ${settings.default_base_branch}\n---\n`;
 
   let workflowBlock: string;

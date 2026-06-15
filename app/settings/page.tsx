@@ -92,7 +92,7 @@ export default function SettingsPage() {
   const [error, setError] = useState("");
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [tab, setTab] = useState<
-    "people" | "knowledge" | "agents" | "workflow"
+    "people" | "knowledge" | "agents" | "workflow" | "corp"
   >("people");
   const [configuring, setConfiguring] = useState(false);
   const [activeName, setActiveName] = useState("");
@@ -314,6 +314,7 @@ export default function SettingsPage() {
             ["knowledge", "conhecimento & dreaming"],
             ["agents", "orquestração & agentes"],
             ["workflow", "workflow, gates & notificações"],
+            ["corp", "corporativo (SSO & Git)"],
           ].map(([id, label]) => (
             <button
               key={id}
@@ -724,6 +725,7 @@ export default function SettingsPage() {
         </>
         )}
 
+        {tab === "corp" && <CorporateSection />}
         {tab === "agents" && <ClaudeCodeSection />}
 
         {tab === "workflow" && (
@@ -2240,6 +2242,146 @@ function SimpleField({
         placeholder={placeholder}
         className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
       />
+    </div>
+  );
+}
+
+// ============================================================
+// Seção CORPORATIVO: SSO do time + Identidade Git do usuário
+// ============================================================
+function CorporateSection() {
+  // --- SSO (por time) ---
+  const [sso, setSso] = useState<any>({ enabled: false, provider: "saml", domain: "", metadata_url: "", enforce: true });
+  const [ssoMsg, setSsoMsg] = useState("");
+  // --- Git identity (por usuário) ---
+  const [git, setGit] = useState<any>({ git_username: "", git_email: "", token_hint: "" });
+  const [gitToken, setGitToken] = useState("");
+  const [gitMsg, setGitMsg] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const s = await fetch("/api/sso-config").then((r) => r.json()).catch(() => ({}));
+      if (s.config) setSso({ ...sso, ...s.config });
+      const g = await fetch("/api/git-identity").then((r) => r.json()).catch(() => ({}));
+      if (g.identity) setGit(g.identity);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function saveSso() {
+    setSsoMsg("");
+    const res = await fetch("/api/sso-config", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sso),
+    });
+    setSsoMsg(res.ok ? "configuração de SSO salva ✓" : "erro ao salvar SSO");
+  }
+  async function saveGit() {
+    setGitMsg("");
+    if (!git.git_username || !git.git_email) { setGitMsg("preencha usuário e e-mail"); return; }
+    const res = await fetch("/api/git-identity", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...git, git_token: gitToken || undefined }),
+    });
+    if (res.ok) { setGitMsg("identidade Git salva ✓"); setGitToken(""); }
+    else setGitMsg("erro ao salvar identidade Git");
+  }
+
+  return (
+    <div className="space-y-10">
+      {/* SSO */}
+      <section className="card-surface rounded-panel p-6">
+        <h2 className="font-disp text-lg text-ink-100 mb-1">SSO corporativo</h2>
+        <p className="text-[13px] text-ink-400 mb-5 max-w-[720px]">
+          Ative o login único do time. Com SSO habilitado e <b className="text-ink-200">exigido</b>,
+          os próximos logins do domínio configurado passam a ser feitos pelo provedor corporativo.
+          Usuários que já entravam por e-mail/senha são <b className="text-ink-200">reconciliados pelo e-mail</b>:
+          ao logar via SSO com o mesmo endereço, continuam na mesma conta, sem perder histórico.
+        </p>
+        <div className="grid md:grid-cols-2 gap-4">
+          <label className="flex items-center gap-2 text-sm text-ink-200">
+            <input type="checkbox" checked={!!sso.enabled} onChange={(e) => setSso({ ...sso, enabled: e.target.checked })} />
+            habilitar SSO para este time
+          </label>
+          <label className="flex items-center gap-2 text-sm text-ink-200">
+            <input type="checkbox" checked={sso.enforce !== false} onChange={(e) => setSso({ ...sso, enforce: e.target.checked })} />
+            exigir SSO (bloquear senha) para o domínio
+          </label>
+          <div>
+            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">provedor</label>
+            <select value={sso.provider ?? "saml"} onChange={(e) => setSso({ ...sso, provider: e.target.value })}
+              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100">
+              <option value="saml">SAML 2.0</option>
+              <option value="oidc">OIDC</option>
+              <option value="azure">Azure AD / Entra ID</option>
+              <option value="google">Google Workspace</option>
+              <option value="okta">Okta</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">domínio corporativo</label>
+            <input value={sso.domain ?? ""} onChange={(e) => setSso({ ...sso, domain: e.target.value })}
+              placeholder="ex: cielo.com.br"
+              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">SAML metadata URL (informativo)</label>
+            <input value={sso.metadata_url ?? ""} onChange={(e) => setSso({ ...sso, metadata_url: e.target.value })}
+              placeholder="https://idp.cielo.com.br/saml/metadata"
+              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
+          </div>
+        </div>
+        <div className="flex items-center gap-3 mt-4">
+          <button onClick={saveSso} className="pill !bg-qa !text-ink-950 !border-qa font-semibold">salvar SSO</button>
+          {ssoMsg && <span className="text-[12px] font-mono text-qa">{ssoMsg}</span>}
+        </div>
+        <p className="text-[11px] text-ink-500 mt-4 leading-relaxed">
+          // o provedor de identidade (IdP) em si é registrado no Supabase Auth (Authentication → SSO).
+          Aqui você define a política do time: domínio, provedor e se o SSO é obrigatório. A reconciliação
+          por e-mail é automática — o Supabase vincula a identidade SSO à conta existente de mesmo e-mail.
+        </p>
+      </section>
+
+      {/* Identidade Git */}
+      <section className="card-surface rounded-panel p-6">
+        <h2 className="font-disp text-lg text-ink-100 mb-1">Identidade Git (escrita nos repositórios)</h2>
+        <p className="text-[13px] text-ink-400 mb-5 max-w-[720px]">
+          Defina qual usuário do Git os agentes usam para <b className="text-ink-200">escrever código no seu nome</b>.
+          Best practice: gere um <b className="text-ink-200">Personal Access Token fine-grained</b> com escopo mínimo
+          (<span className="font-mono text-development">Contents: Read and write</span> nos repositórios do time) e cole
+          abaixo. O token é guardado no servidor e <b className="text-ink-200">nunca é exibido de volta</b> — só os últimos 4 dígitos.
+        </p>
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">usuário do GitHub</label>
+            <input value={git.git_username ?? ""} onChange={(e) => setGit({ ...git, git_username: e.target.value })}
+              placeholder="ex: emigotto"
+              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">e-mail dos commits</label>
+            <input value={git.git_email ?? ""} onChange={(e) => setGit({ ...git, git_email: e.target.value })}
+              placeholder="ex: eduardo.migotto@cielo.com.br"
+              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+              Personal Access Token (fine-grained · Contents: write)
+            </label>
+            <input type="password" value={gitToken} onChange={(e) => setGitToken(e.target.value)}
+              placeholder={git.token_hint ? `token atual: ${git.token_hint} (deixe em branco p/ manter)` : "github_pat_..."}
+              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
+          </div>
+        </div>
+        <div className="flex items-center gap-3 mt-4">
+          <button onClick={saveGit} className="pill !bg-development !text-ink-950 !border-development font-semibold">salvar identidade Git</button>
+          {gitMsg && <span className="text-[12px] font-mono text-qa">{gitMsg}</span>}
+        </div>
+        <p className="text-[11px] text-ink-500 mt-4 leading-relaxed">
+          // quando configurada, os agentes que rodam suas features usam ESTE token e identidade para clonar,
+          commitar e dar push — resolvendo os erros de permissão de escrita. Sem configuração, cai no token global do time.
+        </p>
+      </section>
     </div>
   );
 }
