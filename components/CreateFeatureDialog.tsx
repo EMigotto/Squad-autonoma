@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 
 function stringifyError(err: unknown): string {
   if (typeof err === "string") return err;
@@ -122,12 +121,6 @@ export default function CreateFeatureDialog({
   }
 
   async function uploadAll(): Promise<string[]> {
-    const sb = createClient();
-    const {
-      data: { user },
-    } = await sb.auth.getUser();
-    if (!user) throw new Error("sessão expirada");
-
     const uploaded: string[] = [];
 
     for (let i = 0; i < files.length; i++) {
@@ -142,27 +135,26 @@ export default function CreateFeatureDialog({
         prev.map((f, j) => (j === i ? { ...f, status: "uploading" } : f))
       );
 
-      const path = `${user.id}/${Date.now()}-${pending.file.name}`;
-      const { error: upErr } = await sb.storage
-        .from("feature-attachments")
-        .upload(path, pending.file, {
-          contentType: pending.file.type || "text/html",
-          upsert: false,
-        });
+      // Upload SERVER-SIDE (evita CORS do Storage em domínios não cadastrados)
+      const fd = new FormData();
+      fd.append("file", pending.file);
+      const res = await fetch("/api/upload-attachment", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
 
-      if (upErr) {
+      if (!res.ok || !data.path) {
+        const errMsg = data.error || `HTTP ${res.status}`;
         setFiles((prev) =>
           prev.map((f, j) =>
-            j === i ? { ...f, status: "error", error: upErr.message } : f
+            j === i ? { ...f, status: "error", error: errMsg } : f
           )
         );
-        throw new Error(`falha no upload de ${pending.file.name}: ${upErr.message}`);
+        throw new Error(`falha no upload de ${pending.file.name}: ${errMsg}`);
       }
 
-      uploaded.push(path);
+      uploaded.push(data.path);
       setFiles((prev) =>
         prev.map((f, j) =>
-          j === i ? { ...f, status: "done", storagePath: path } : f
+          j === i ? { ...f, status: "done", storagePath: data.path } : f
         )
       );
     }

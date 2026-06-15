@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { normalizeGithubRepo } from "@/lib/github";
 
 export const runtime = "nodejs";
 
@@ -37,7 +38,7 @@ export async function GET(
       return NextResponse.json({ error: "card not found" }, { status: 404 });
     }
 
-    const repo = (card.feature as any).github_repo as string;
+    const repo = normalizeGithubRepo((card.feature as any).github_repo as string);
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
       return NextResponse.json(
@@ -109,7 +110,7 @@ export async function PUT(
       .eq("id", params.id)
       .single();
     if (!card?.feature) return NextResponse.json({ error: "card not found" }, { status: 404 });
-    const repo = (card.feature as any).github_repo as string;
+    const repo = normalizeGithubRepo((card.feature as any).github_repo as string);
     const slug = (card.feature as any).slug as string;
     const token = process.env.GITHUB_TOKEN;
     if (!token) return NextResponse.json({ error: "GITHUB_TOKEN não configurado" }, { status: 500 });

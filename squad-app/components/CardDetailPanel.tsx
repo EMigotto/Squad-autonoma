@@ -104,6 +104,7 @@ export default function CardDetailPanel({
     branch?: string;
     files: { path: string; name: string; ext: string; size: number }[];
     error?: string;
+    notice?: string;
     loaded: boolean;
   }>({ loading: false, files: [], loaded: false });
 
@@ -117,6 +118,7 @@ export default function CardDetailPanel({
         branch: data.branch,
         files: data.tree ?? [],
         error: data.error,
+        notice: data.notice,
         loaded: true,
       });
     } catch (e) {
@@ -2458,6 +2460,7 @@ function RepoFileBrowser({
     branch?: string;
     files: { path: string; name: string; ext: string; size: number }[];
     error?: string;
+    notice?: string;
     loaded: boolean;
   };
   onOpenFile: (path: string, name: string, branch?: string) => void;
@@ -2468,6 +2471,12 @@ function RepoFileBrowser({
     return <div className="p-6 text-xs text-ink-400 italic">carregando árvore do repositório…</div>;
   if (tree.error)
     return <div className="p-6 text-xs text-qa">erro ao listar arquivos: {tree.error}</div>;
+  if (tree.notice && tree.files.length === 0)
+    return (
+      <div className="p-6 text-xs text-ink-400 leading-relaxed">
+        <span className="text-planning">ⓘ</span> {tree.notice}
+      </div>
+    );
   if (!tree.files.length)
     return <div className="p-6 text-xs text-ink-400 italic">nenhum arquivo encontrado nesta branch.</div>;
 

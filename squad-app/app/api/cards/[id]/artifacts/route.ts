@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { normalizeGithubRepo } from "@/lib/github";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -27,7 +28,7 @@ export async function GET(
     const svc = createServiceClient();
     const { data: card } = await svc
       .from("cards")
-      .select("feature:features(slug, github_repo, environment_id)")
+      .select("feature:features(slug, github_repo, environment_id, working_branch)")
       .eq("id", params.id)
       .single();
 
@@ -35,7 +36,7 @@ export async function GET(
       return NextResponse.json({ error: "card or feature not found" }, { status: 404 });
 
     const feature = card.feature as any;
-    const repo = feature.github_repo as string;
+    const repo = normalizeGithubRepo(feature.github_repo as string);
     const slug = feature.slug as string;
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
@@ -45,9 +46,10 @@ export async function GET(
       );
     }
 
-    // Branch do ambiente do card (onde tudo é commitado no novo workflow)
-    let envBranch: string | null = null;
-    if (feature.environment_id) {
+    // Branch onde os agentes commitam tudo: working_branch da feature (no novo
+    // workflow). Fallback para a branch do ambiente e depois "main".
+    let envBranch: string | null = (feature.working_branch as string | null) ?? null;
+    if (!envBranch && feature.environment_id) {
       const { data: env } = await svc
         .from("environments")
         .select("branch")

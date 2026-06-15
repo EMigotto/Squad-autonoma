@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { normalizeGithubRepo } from "@/lib/github";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -47,10 +48,25 @@ export async function GET(
     }
     branch = branch || "main";
 
-    const treeUrl = `https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
+    const repoNorm = normalizeGithubRepo(repo);
+    const treeUrl = `https://api.github.com/repos/${repoNorm}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
     const res = await fetch(treeUrl, {
       headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
     });
+    if (res.status === 404) {
+      // Branch ainda não existe no GitHub (ex.: PM Agent ainda não rodou).
+      // Não é erro: é um estado informativo.
+      return NextResponse.json(
+        {
+          branch,
+          tree: [],
+          notice:
+            `A branch "${branch}" ainda não existe no repositório. ` +
+            `Os arquivos aparecem aqui depois que o primeiro agente roda e faz o commit inicial.`,
+        },
+        { status: 200 }
+      );
+    }
     if (!res.ok) {
       const body = await res.text();
       return NextResponse.json(
