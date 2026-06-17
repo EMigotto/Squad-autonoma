@@ -2325,119 +2325,81 @@ function CorporateSection() {
 }
 
 // ============================================================
-// Seção SKILLS & MARKETPLACE: upload de skills + matriz papel × skill
+// Seção SKILLS (projeto): herda as skills globais e permite sobrescrever/remover
+// por papel. Upload de skills é feito no Admin (skills globais).
 // ============================================================
 function SkillsSection() {
   const [skills, setSkills] = useState<any[]>([]);
-  const [assoc, setAssoc] = useState<any[]>([]);
+  const [globalAssoc, setGlobalAssoc] = useState<any[]>([]);
+  const [projAssoc, setProjAssoc] = useState<any[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  // upload
-  const [file, setFile] = useState<File | null>(null);
-  const [name, setName] = useState("");
-  const [capability, setCapability] = useState("");
-  const [description, setDescription] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [msg, setMsg] = useState("");
 
   async function load() {
     const d = await fetch("/api/skills").then((r) => r.json()).catch(() => ({}));
     setSkills(d.skills ?? []);
-    setAssoc(d.associations ?? []);
+    setGlobalAssoc(d.global_associations ?? []);
+    setProjAssoc(d.project_associations ?? []);
     setAgents(d.agents ?? []);
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
 
-  function isOn(role: string, skillId: string) {
-    return assoc.some((a) => a.agent_role === role && a.skill_catalog_id === skillId && a.enabled);
+  function inheritedOn(role: string, skillId: string) {
+    return globalAssoc.some((a) => a.agent_role === role && a.skill_catalog_id === skillId && a.enabled);
   }
-  async function toggle(role: string, skillId: string, enabled: boolean) {
-    setAssoc((prev) => {
+  function projOverride(role: string, skillId: string): boolean | null {
+    const row = projAssoc.find((a) => a.agent_role === role && a.skill_catalog_id === skillId);
+    return row ? row.enabled : null; // null = sem override
+  }
+  // estado efetivo (o que de fato vale)
+  function effectiveOn(role: string, skillId: string) {
+    const ov = projOverride(role, skillId);
+    if (ov !== null) return ov;
+    return inheritedOn(role, skillId);
+  }
+
+  async function setOverride(role: string, skillId: string, enabled: boolean) {
+    // grava override do projeto (enabled=true adiciona, false remove o herdado)
+    setProjAssoc((prev) => {
       const others = prev.filter((a) => !(a.agent_role === role && a.skill_catalog_id === skillId));
-      return enabled ? [...others, { agent_role: role, skill_catalog_id: skillId, enabled: true }] : others;
+      return [...others, { agent_role: role, skill_catalog_id: skillId, enabled }];
     });
     await fetch("/api/skills/associate", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent_role: role, skill_catalog_id: skillId, enabled }),
     });
   }
-
-  async function upload() {
-    setMsg("");
-    if (!file || !name) { setMsg("selecione o .zip e dê um nome"); return; }
-    setUploading(true);
-    const fd = new FormData();
-    fd.append("file", file); fd.append("name", name);
-    fd.append("capability", capability); fd.append("description", description);
-    const res = await fetch("/api/skills", { method: "POST", body: fd });
-    const d = await res.json().catch(() => ({}));
-    if (res.ok) {
-      setMsg("skill enviada ✓"); setFile(null); setName(""); setCapability(""); setDescription("");
-      load();
-    } else setMsg(d.error ?? "falha no upload");
-    setUploading(false);
+  async function clearOverride(role: string, skillId: string) {
+    // remover o override = voltar a seguir o global. Implementado como delete do override.
+    setProjAssoc((prev) => prev.filter((a) => !(a.agent_role === role && a.skill_catalog_id === skillId)));
+    await fetch("/api/skills/associate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_role: role, skill_catalog_id: skillId, clear: true }),
+    });
   }
 
   return (
     <div className="space-y-10">
       <section className="card-surface rounded-panel p-6">
-        <h2 className="font-disp text-lg text-ink-100 mb-1">Como os agentes usam Skills</h2>
+        <h2 className="font-disp text-lg text-ink-100 mb-1">Skills deste time</h2>
         <p className="text-[13px] text-ink-400 max-w-[760px] leading-relaxed">
-          Skills são pacotes de capacidade (um <span className="font-mono text-development">SKILL.md</span> + scripts)
-          que o agente <b className="text-ink-200">invoca sozinho quando a tarefa precisa</b> — sem inflar o contexto
-          até serem necessárias (progressive disclosure). Associe abaixo quais skills cada papel pode usar;
-          ao salvar, o prompt do agente passa a citar "para a capacidade X, use a skill Y", e o array de skills é
-          anexado na próxima implantação. Limite de 20 skills por sessão.
+          As skills e as associações <b className="text-ink-200">globais</b> (definidas no Admin) são herdadas
+          automaticamente por este time — inclusive em projetos novos. Aqui você pode <b className="text-ink-200">sobrescrever</b>:
+          adicionar uma skill que o global não traz, ou remover uma herdada que não faz sentido aqui. O upload de
+          novas skills é feito no Admin. Após mudar, rode o <b className="text-ink-200">↻ redeploy em massa</b>.
         </p>
-      </section>
-
-      {/* Upload */}
-      <section className="card-surface rounded-panel p-6">
-        <h2 className="font-disp text-lg text-ink-100 mb-1">Subir skill (marketplace)</h2>
-        <p className="text-[13px] text-ink-400 mb-4 max-w-[720px]">
-          Envie um <b className="text-ink-200">.zip com o SKILL.md na raiz</b> (mais scripts/recursos, se houver).
-          A skill é publicada no workspace via Skills API e fica disponível para associação. Dê um nome e a
-          <b className="text-ink-200"> capacidade</b> que ela cobre — é isso que entra no prompt do agente.
-        </p>
-        <div className="grid md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">arquivo .zip da skill</label>
-            <input type="file" accept=".zip" onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="text-[12px] text-ink-300" />
-          </div>
-          <div>
-            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">nome</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="ex: auditor-certificado-digital"
-              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
-          </div>
-          <div>
-            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">capacidade (entra no prompt)</label>
-            <input value={capability} onChange={(e) => setCapability(e.target.value)} placeholder="ex: auditar assinatura digital"
-              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
-          </div>
-          <div>
-            <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">descrição (opcional)</label>
-            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="o que a skill faz"
-              className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
-          </div>
-        </div>
-        <div className="flex items-center gap-3 mt-4">
-          <button onClick={upload} disabled={uploading}
-            className="pill !bg-development !text-ink-950 !border-development font-semibold disabled:opacity-50">
-            {uploading ? "enviando…" : "subir skill"}
-          </button>
-          {msg && <span className="text-[12px] font-mono text-qa">{msg}</span>}
+        <div className="flex gap-4 mt-3 text-[11px] text-ink-500">
+          <span>● <span className="text-ink-300">herdado</span> = vem do global</span>
+          <span>● <span className="text-development">override +</span> = adicionado neste time</span>
+          <span>● <span className="text-qa">override −</span> = removido neste time</span>
         </div>
       </section>
 
-      {/* Matriz papel × skill */}
       <section className="card-surface rounded-panel p-6">
-        <h2 className="font-disp text-lg text-ink-100 mb-3">Associação skill × agente</h2>
-        {loading ? (
-          <div className="skeleton h-24 rounded-card" />
-        ) : skills.length === 0 ? (
-          <div className="text-[13px] text-ink-400">Nenhuma skill no catálogo. Rode a migration v38 e/ou suba uma skill.</div>
+        <h2 className="font-disp text-lg text-ink-100 mb-3">Associação skill × agente (efetiva)</h2>
+        {loading ? <div className="skeleton h-24 rounded-card" /> : skills.length === 0 ? (
+          <div className="text-[13px] text-ink-400">Nenhuma skill no catálogo. Suba skills no Admin.</div>
         ) : agents.length === 0 ? (
           <div className="text-[13px] text-ink-400">Nenhum agente implantado neste time ainda.</div>
         ) : (
@@ -2446,29 +2408,42 @@ function SkillsSection() {
               <thead>
                 <tr className="text-ink-500 font-mono text-[10px] uppercase tracking-wider text-left border-b border-ink-700">
                   <th className="py-2 pr-4">skill</th>
-                  {agents.map((a) => <th key={a.role} className="py-2 px-3 text-center">{a.role}</th>)}
+                  {agents.map((a) => <th key={a.role} className="py-2 px-2 text-center">{a.role}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {skills.map((s) => (
                   <tr key={s.id} className="border-b border-ink-800">
                     <td className="py-2 pr-4">
-                      <div className="text-ink-100">{s.name} {s.source === "anthropic" && <span className="text-[10px] text-planning">pré-build</span>}</div>
+                      <div className="text-ink-100">{s.name} {s.source === "anthropic" && <span className="text-[10px] text-planning">pré-build</span>} {s.project_id && <span className="text-[10px] text-development">deste time</span>}</div>
                       <div className="text-[11px] text-ink-500">{s.capability ?? s.description ?? s.skill_id}</div>
                     </td>
-                    {agents.map((a) => (
-                      <td key={a.role} className="py-2 px-3 text-center">
-                        <input type="checkbox" checked={isOn(a.role, s.id)}
-                          onChange={(e) => toggle(a.role, s.id, e.target.checked)} />
-                      </td>
-                    ))}
+                    {agents.map((a) => {
+                      const eff = effectiveOn(a.role, s.id);
+                      const inh = inheritedOn(a.role, s.id);
+                      const ov = projOverride(a.role, s.id);
+                      const overridden = ov !== null && ov !== inh;
+                      return (
+                        <td key={a.role} className="py-2 px-2 text-center">
+                          <div className="flex flex-col items-center gap-0.5">
+                            <input type="checkbox" checked={eff}
+                              onChange={(e) => setOverride(a.role, s.id, e.target.checked)} />
+                            {overridden ? (
+                              <button onClick={() => clearOverride(a.role, s.id)}
+                                className={`text-[9px] ${ov ? "text-development" : "text-qa"} hover:underline`}>
+                                {ov ? "+override" : "−override"} ✕
+                              </button>
+                            ) : inh ? <span className="text-[9px] text-ink-600">herdado</span> : null}
+                          </div>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
             </table>
             <p className="text-[11px] text-ink-500 mt-4">
-              // após mudar associações, rode <b className="text-ink-300">↻ redeploy em massa</b> (aba orquestração & agentes)
-              para propagar as skills e o prompt atualizado aos agentes já implantados.
+              // marcar/desmarcar cria um override deste time. O "✕" remove o override e volta a seguir o global.
             </p>
           </div>
         )}

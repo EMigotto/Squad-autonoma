@@ -1023,13 +1023,24 @@ async function resolveAgentSkills(
   role: string
 ): Promise<{ skills: any[]; promptBlock: string }> {
   const sb = createServiceClient();
-  const { data: assoc } = await sb
+  const { data: globalAssoc } = await sb
     .from("agent_skills")
-    .select("skill_catalog_id")
+    .select("skill_catalog_id, enabled")
+    .is("project_id", null)
+    .eq("agent_role", role);
+  const { data: projAssoc } = await sb
+    .from("agent_skills")
+    .select("skill_catalog_id, enabled")
     .eq("project_id", projectId)
-    .eq("agent_role", role)
-    .eq("enabled", true);
-  const ids = (assoc ?? []).map((a: any) => a.skill_catalog_id);
+    .eq("agent_role", role);
+  // efetivo = globais habilitados ∪ adicionados pelo projeto − removidos pelo projeto
+  const effective = new Set<string>();
+  for (const g of globalAssoc ?? []) if (g.enabled) effective.add(g.skill_catalog_id);
+  for (const p of projAssoc ?? []) {
+    if (p.enabled) effective.add(p.skill_catalog_id);
+    else effective.delete(p.skill_catalog_id);
+  }
+  const ids = [...effective];
   if (ids.length === 0) return { skills: [], promptBlock: "" };
   const { data: cat } = await sb.from("skills_catalog").select("*").in("id", ids);
   const rows = cat ?? [];

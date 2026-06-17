@@ -173,6 +173,150 @@ export default function AdminPage() {
           e-mail é automática — o Supabase vincula a identidade SSO à conta existente de mesmo e-mail.
         </p>
       </section>
+
+      <SkillsAdminSection isAdmin={isAdmin} />
     </main>
+  );
+}
+
+// ============================================================
+// Skills GLOBAIS (Admin): upload, listagem com exclusão e matriz global
+// papel × skill que vira padrão herdado por TODOS os projetos.
+// ============================================================
+function SkillsAdminSection({ isAdmin }: { isAdmin: boolean | null }) {
+  const [skills, setSkills] = useState<any[]>([]);
+  const [assoc, setAssoc] = useState<any[]>([]);
+  const [roles, setRoles] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [file, setFile] = useState<File | null>(null);
+  const [name, setName] = useState("");
+  const [capability, setCapability] = useState("");
+  const [description, setDescription] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function load() {
+    const d = await fetch("/api/admin/skills").then((r) => r.json()).catch(() => ({}));
+    setSkills(d.skills ?? []); setAssoc(d.associations ?? []); setRoles(d.roles ?? []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  function isOn(role: string, skillId: string) {
+    return assoc.some((a) => a.agent_role === role && a.skill_catalog_id === skillId && a.enabled);
+  }
+  async function toggle(role: string, skillId: string, enabled: boolean) {
+    setAssoc((prev) => {
+      const others = prev.filter((a) => !(a.agent_role === role && a.skill_catalog_id === skillId));
+      return enabled ? [...others, { agent_role: role, skill_catalog_id: skillId, enabled: true }] : others;
+    });
+    await fetch("/api/admin/skills/associate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_role: role, skill_catalog_id: skillId, enabled }),
+    });
+  }
+  async function upload() {
+    setMsg("");
+    if (!file || !name) { setMsg("selecione o .zip e dê um nome"); return; }
+    setUploading(true);
+    const fd = new FormData();
+    fd.append("file", file); fd.append("name", name);
+    fd.append("capability", capability); fd.append("description", description);
+    const res = await fetch("/api/admin/skills", { method: "POST", body: fd });
+    const d = await res.json().catch(() => ({}));
+    if (res.ok) { setMsg("skill global enviada ✓"); setFile(null); setName(""); setCapability(""); setDescription(""); load(); }
+    else setMsg(d.error ?? "falha no upload");
+    setUploading(false);
+  }
+  async function remove(id: string, nm: string) {
+    if (!confirm(`Excluir a skill "${nm}"? Isso remove de todos os projetos e do workspace.`)) return;
+    const res = await fetch(`/api/admin/skills/${id}`, { method: "DELETE" });
+    if (res.ok) load(); else { const d = await res.json().catch(() => ({})); alert(d.error ?? "falha ao excluir"); }
+  }
+
+  return (
+    <>
+      <section className="card-surface rounded-panel p-6 mt-8">
+        <h2 className="font-disp text-lg text-ink-100 mb-1">Skills globais — subir</h2>
+        <p className="text-[13px] text-ink-400 mb-4 max-w-[720px]">
+          Skills enviadas aqui são <b className="text-ink-200">globais</b>: ficam disponíveis para todos os
+          times. Envie um <b className="text-ink-200">.zip com SKILL.md na raiz</b>. A capacidade informada é o
+          que entra no prompt dos agentes.
+        </p>
+        <fieldset disabled={!isAdmin} className="disabled:opacity-60">
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">arquivo .zip</label>
+              <input type="file" accept=".zip" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-[12px] text-ink-300" />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">nome</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="ex: auditor-certificado-digital"
+                className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">capacidade (entra no prompt)</label>
+              <input value={capability} onChange={(e) => setCapability(e.target.value)} placeholder="ex: auditar assinatura digital"
+                className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">descrição (opcional)</label>
+              <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="o que a skill faz"
+                className="w-full bg-ink-900 border border-ink-700 rounded-card px-2 py-1.5 text-sm text-ink-100" />
+            </div>
+          </div>
+          <div className="flex items-center gap-3 mt-4">
+            <button onClick={upload} disabled={uploading || !isAdmin}
+              className="pill !bg-development !text-ink-950 !border-development font-semibold disabled:opacity-50">
+              {uploading ? "enviando…" : "subir skill global"}
+            </button>
+            {msg && <span className="text-[12px] font-mono text-qa">{msg}</span>}
+          </div>
+        </fieldset>
+      </section>
+
+      <section className="card-surface rounded-panel p-6 mt-8">
+        <h2 className="font-disp text-lg text-ink-100 mb-3">Catálogo global & associação padrão</h2>
+        {loading ? <div className="skeleton h-24 rounded-card" /> : skills.length === 0 ? (
+          <div className="text-[13px] text-ink-400">Nenhuma skill global. Rode a migration v38/v39 e/ou suba uma skill.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12.5px]">
+              <thead>
+                <tr className="text-ink-500 font-mono text-[10px] uppercase tracking-wider text-left border-b border-ink-700">
+                  <th className="py-2 pr-4">skill</th>
+                  {roles.map((r) => <th key={r} className="py-2 px-2 text-center">{r}</th>)}
+                  <th className="py-2 pl-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {skills.map((s) => (
+                  <tr key={s.id} className="border-b border-ink-800">
+                    <td className="py-2 pr-4">
+                      <div className="text-ink-100">{s.name} {s.source === "anthropic" && <span className="text-[10px] text-planning">pré-build</span>}</div>
+                      <div className="text-[11px] text-ink-500">{s.capability ?? s.description ?? s.skill_id}</div>
+                    </td>
+                    {roles.map((r) => (
+                      <td key={r} className="py-2 px-2 text-center">
+                        <input type="checkbox" disabled={!isAdmin} checked={isOn(r, s.id)}
+                          onChange={(e) => toggle(r, s.id, e.target.checked)} />
+                      </td>
+                    ))}
+                    <td className="py-2 pl-2 text-right">
+                      <button disabled={!isAdmin} onClick={() => remove(s.id, s.name)}
+                        className="text-[11px] text-ink-500 hover:text-qa disabled:opacity-40">excluir</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-[11px] text-ink-500 mt-4">
+              // a associação marcada aqui é o <b className="text-ink-300">padrão herdado por todos os projetos</b> (inclusive novos).
+              Cada projeto pode sobrescrever/remover em Settings → skills. Após mudar, rode o redeploy em massa nos times afetados.
+            </p>
+          </div>
+        )}
+      </section>
+    </>
   );
 }

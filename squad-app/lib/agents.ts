@@ -233,3 +233,6 @@ export const BUILTIN_AGENTS: BuiltinAgent[] = [
 // Helper para os specs builtin
 export const ALL_ROLES = BUILTIN_AGENTS.map((a) => a.role);
 export type AgentRole = string;
+
+// Papéis padrão (para a matriz global de skills no Admin)
+export const BUILTIN_ROLES: string[] = BUILTIN_AGENTS.map((a) => a.role);
