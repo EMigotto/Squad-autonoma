@@ -385,11 +385,13 @@ async function resolveDeployedAgent(
     .eq("id", projectId)
     .maybeSingle();
   const suffix = project?.sigla ? ` [${project.sigla}]` : "";
-  const spec = buildClaudeSpec({
+  const { skills: provSkills, promptBlock: provBlock } = await resolveAgentSkills(projectId, def.role);
+  const spec: any = buildClaudeSpec({
     name: `${def.name}${suffix} · ${model}`,
     model,
-    system_prompt: def.system_prompt,
+    system_prompt: def.system_prompt + provBlock,
   });
+  if (provSkills.length) spec.skills = provSkills;
   const agent = await beta.agents.create(spec);
   const { data: inserted } = await sb
     .from("agents")
@@ -1012,6 +1014,42 @@ export async function onboardProject(projectId: string): Promise<{ session_id: s
 // mais recentes do código (ex.: tradução pt-BR). Usa busca de versão
 // fresca + retry no 409 "Concurrent modification".
 // ============================================================
+
+// Resolve as skills associadas a um papel de agente (catálogo + associação).
+// Retorna o array no formato da API (skills) e um bloco de prompt que orienta
+// o agente a usar a skill para a capacidade correspondente.
+async function resolveAgentSkills(
+  projectId: string,
+  role: string
+): Promise<{ skills: any[]; promptBlock: string }> {
+  const sb = createServiceClient();
+  const { data: assoc } = await sb
+    .from("agent_skills")
+    .select("skill_catalog_id")
+    .eq("project_id", projectId)
+    .eq("agent_role", role)
+    .eq("enabled", true);
+  const ids = (assoc ?? []).map((a: any) => a.skill_catalog_id);
+  if (ids.length === 0) return { skills: [], promptBlock: "" };
+  const { data: cat } = await sb.from("skills_catalog").select("*").in("id", ids);
+  const rows = cat ?? [];
+  const skills = rows.slice(0, 20).map((r: any) =>
+    r.source === "anthropic"
+      ? { type: "anthropic", skill_id: r.skill_id }
+      : { type: "custom", skill_id: r.skill_id, version: r.version || "latest" }
+  );
+  let promptBlock = "";
+  if (rows.length) {
+    promptBlock =
+      `\n=== SKILLS DISPONÍVEIS (use quando a capacidade for necessária) ===\n` +
+      rows.map((r: any) =>
+        `- Para "${r.capability ?? r.name}": use a skill "${r.name}" (${r.skill_id}). ${r.description ?? ""}`
+      ).join("\n") +
+      `\nQuando a tarefa exigir uma dessas capacidades, INVOQUE a skill correspondente em vez de improvisar.\n===\n`;
+  }
+  return { skills, promptBlock };
+}
+
 export async function redeployAllAgents(
   projectId: string,
   opts: { refreshBuiltins?: boolean } = {}
@@ -1076,12 +1114,14 @@ export async function redeployAllAgents(
 
   for (const def of defs ?? []) {
     try {
-      const spec = buildClaudeSpec({
+      const { skills, promptBlock } = await resolveAgentSkills(projectId, def.role);
+      const spec: any = buildClaudeSpec({
         name: `${def.name}${suffix}`,
         model: def.model,
-        system_prompt: def.system_prompt,
+        system_prompt: def.system_prompt + promptBlock,
       });
-      const promptHash = hashPrompt(def.system_prompt);
+      if (skills.length) spec.skills = skills;
+      const promptHash = hashPrompt(def.system_prompt + promptBlock);
       const { data: existing } = await sb
         .from("agents")
         .select("claude_agent_id, system_prompt_hash, claude_agent_version")
@@ -1192,12 +1232,14 @@ export async function provisionTeamAgents(
 
   for (const def of defs ?? []) {
     try {
-      const spec = buildClaudeSpec({
+      const { skills, promptBlock } = await resolveAgentSkills(projectId, def.role);
+      const spec: any = buildClaudeSpec({
         name: `${def.name}${suffix}`,
         model: def.model,
-        system_prompt: def.system_prompt,
+        system_prompt: def.system_prompt + promptBlock,
       });
-      const promptHash = hashPrompt(def.system_prompt);
+      if (skills.length) spec.skills = skills;
+      const promptHash = hashPrompt(def.system_prompt + promptBlock);
       const { data: existing } = await sb
         .from("agents")
         .select("claude_agent_id, system_prompt_hash, claude_agent_version")
