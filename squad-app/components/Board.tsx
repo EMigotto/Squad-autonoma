@@ -416,12 +416,6 @@ export default function Board({
           >
             settings
           </Link>
-          <Link
-            href="/admin/setup"
-            className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100 px-3 py-1.5"
-          >
-            admin
-          </Link>
           <button
             onClick={() => setShowBug(true)}
             className="border border-planning text-planning px-3 py-1.5 text-sm font-semibold hover:bg-planning/10 transition-colors"

@@ -55,6 +55,7 @@ export default function AdminPage() {
             administração · aplicação global
           </span>
           <span className="h-px flex-1 bg-ink-700" />
+          <Link href="/admin/setup" className="pill text-ink-300 hover:text-ink-100">setup de agentes</Link>
           <Link href="/" className="pill text-ink-300 hover:text-ink-100">← board</Link>
         </div>
         <h1 className="font-disp font-semibold text-[clamp(26px,3.4vw,38px)] leading-[1.05] mb-2">

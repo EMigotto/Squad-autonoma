@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface Agent {
   role: string;
@@ -205,6 +205,9 @@ export default function AgentEditor({ agent, onClose, onSaved }: Props) {
             </div>
           </div>
 
+          {/* Skills do agente (herdadas do global + override do time) */}
+          {!isNew && agent && <AgentSkills role={agent.role} />}
+
           {error && (
             <div className="border border-qa bg-qa/10 p-3 text-xs text-qa font-mono">
               {error}
@@ -299,6 +302,148 @@ function Select({
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+// Skills associadas ao agente (papel): herdadas do global + overrides do time.
+// Permite retirar o vínculo (override −) e redeployar só este agente.
+function AgentSkills({ role }: { role: string }) {
+  const [skills, setSkills] = useState<any[]>([]);
+  const [globalAssoc, setGlobalAssoc] = useState<any[]>([]);
+  const [projAssoc, setProjAssoc] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dirty, setDirty] = useState(false);
+  const [redeploying, setRedeploying] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function load() {
+    const d = await fetch("/api/skills").then((r) => r.json()).catch(() => ({}));
+    setSkills(d.skills ?? []);
+    setGlobalAssoc(d.global_associations ?? []);
+    setProjAssoc(d.project_associations ?? []);
+    setLoading(false);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [role]);
+
+  function inheritedOn(skillId: string) {
+    return globalAssoc.some((a) => a.agent_role === role && a.skill_catalog_id === skillId && a.enabled);
+  }
+  function projOverride(skillId: string): boolean | null {
+    const row = projAssoc.find((a) => a.agent_role === role && a.skill_catalog_id === skillId);
+    return row ? row.enabled : null;
+  }
+  function effectiveOn(skillId: string) {
+    const ov = projOverride(skillId);
+    if (ov !== null) return ov;
+    return inheritedOn(skillId);
+  }
+
+  // skills que de fato valem para este papel (efetivas)
+  const effective = skills.filter((s) => effectiveOn(s.id));
+
+  async function unlink(skillId: string) {
+    // retira o vínculo: grava override enabled=false (remove o herdado p/ este time)
+    setProjAssoc((prev) => {
+      const others = prev.filter((a) => !(a.agent_role === role && a.skill_catalog_id === skillId));
+      return [...others, { agent_role: role, skill_catalog_id: skillId, enabled: false }];
+    });
+    setDirty(true);
+    await fetch("/api/skills/associate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_role: role, skill_catalog_id: skillId, enabled: false }),
+    });
+  }
+  async function relink(skillId: string) {
+    setProjAssoc((prev) => {
+      const others = prev.filter((a) => !(a.agent_role === role && a.skill_catalog_id === skillId));
+      // se o global já traz, basta limpar o override; se não, adiciona override+
+      return inheritedOn(skillId) ? others : [...others, { agent_role: role, skill_catalog_id: skillId, enabled: true }];
+    });
+    setDirty(true);
+    await fetch("/api/skills/associate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent_role: role, skill_catalog_id: skillId,
+        ...(inheritedOn(skillId) ? { clear: true } : { enabled: true }),
+      }),
+    });
+  }
+
+  async function redeployThis() {
+    setRedeploying(true); setMsg("");
+    const res = await fetch("/api/admin/redeploy-agents", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role }),
+    });
+    const d = await res.json().catch(() => ({}));
+    setMsg(res.ok ? "agente redeployado com as skills ✓" : (d.error ?? "falha no redeploy"));
+    if (res.ok) setDirty(false);
+    setRedeploying(false);
+  }
+
+  if (loading) return <div className="skeleton h-16 rounded-card" />;
+
+  return (
+    <div className="border border-discovery/40 bg-discovery/5 rounded-card p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="font-mono text-[10px] tracking-widest uppercase text-discovery">
+          // skills deste agente
+        </div>
+        {dirty && (
+          <span className="text-[10px] text-planning font-semibold animate-pulse">
+            ⚠ alterado — redeploy necessário
+          </span>
+        )}
+      </div>
+
+      {effective.length === 0 ? (
+        <div className="text-[12px] text-ink-400">
+          Nenhuma skill associada a este papel. Associe no Admin (global) ou em Settings → skills.
+        </div>
+      ) : (
+        <ul className="space-y-1.5">
+          {effective.map((s) => {
+            const inh = inheritedOn(s.id);
+            const ov = projOverride(s.id);
+            return (
+              <li key={s.id} className="flex items-center justify-between text-[12px]">
+                <div>
+                  <span className="text-ink-100">{s.name}</span>{" "}
+                  {s.source === "anthropic" && <span className="text-[9px] text-planning">pré-build</span>}
+                  {inh && ov === null && <span className="text-[9px] text-ink-500 ml-1">herdada</span>}
+                  {ov === true && <span className="text-[9px] text-development ml-1">override+</span>}
+                  <div className="text-[10px] text-ink-500">
+                    {s.capability ? `usada para: ${s.capability}` : (s.description ?? s.skill_id)}
+                  </div>
+                </div>
+                <button onClick={() => unlink(s.id)}
+                  className="text-[10px] text-ink-500 hover:text-qa">retirar vínculo</button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {/* skills disponíveis mas removidas deste time (override−) — re-vincular */}
+      {skills.filter((s) => projOverride(s.id) === false).map((s) => (
+        <div key={s.id} className="flex items-center justify-between text-[11px] mt-1 text-ink-500">
+          <span>{s.name} <span className="text-qa">removida deste time</span></span>
+          <button onClick={() => relink(s.id)} className="text-development hover:underline">re-vincular</button>
+        </div>
+      ))}
+
+      <div className="flex items-center gap-3 mt-3 pt-3 border-t border-ink-700">
+        <button onClick={redeployThis} disabled={redeploying}
+          className="px-3 py-1.5 text-[11px] font-semibold rounded-card bg-discovery text-ink-950 hover:opacity-90 disabled:opacity-50">
+          {redeploying ? "redeployando…" : "↻ redeployar este agente com as skills"}
+        </button>
+        {msg && <span className="text-[11px] font-mono text-qa">{msg}</span>}
+      </div>
+      <p className="text-[10px] text-ink-500 mt-2 leading-relaxed">
+        // ao redeployar, o prompt do agente passa a citar onde cada skill é usada e o array de skills é anexado.
+      </p>
     </div>
   );
 }

@@ -34,14 +34,16 @@ export async function POST(req: Request) {
     }
 
     let refreshBuiltins = true;
+    let onlyRole: string | undefined;
     try {
       const body = await req.json();
       if (body?.refreshBuiltins === false) refreshBuiltins = false;
+      if (body?.role) onlyRole = body.role;
     } catch {
       /* sem body, usa default */
     }
 
-    const result = await redeployAllAgents(projectId, { refreshBuiltins });
+    const result = await redeployAllAgents(projectId, { refreshBuiltins, onlyRole });
     return NextResponse.json(result);
   } catch (e) {
     return NextResponse.json(

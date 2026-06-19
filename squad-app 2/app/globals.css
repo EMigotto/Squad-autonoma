@@ -1,0 +1,130 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-disp: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --bg: #0B1518; --bg-top: #0E1D21;
+  --surface: #13262C; --surface-2: #102228;
+  --line: rgba(124,176,181,.14); --line-strong: rgba(124,176,181,.28);
+  --ink: #EAF2F0; --muted: #8FAAAF; --faint: #5F7B80;
+  --eco: #37C97C; --eco-dim: rgba(55,201,124,.16);
+  --copilot: #52B9DC; --copilot-dim: rgba(82,185,220,.14);
+  --amber: #E3A33D; --amber-dim: rgba(227,163,61,.14);
+  --shadow-soft: 0 1px 2px rgba(0,0,0,.25), 0 6px 22px rgba(0,0,0,.28);
+  --shadow-lift: 0 4px 10px rgba(0,0,0,.32), 0 22px 50px rgba(0,0,0,.4);
+  --ring: rgba(55,201,124,.3);
+}
+
+html, body {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  background:
+    radial-gradient(1200px 600px at 85% -8%, rgba(55,201,124,.07), transparent 60%),
+    radial-gradient(900px 500px at 5% 0%, rgba(82,185,220,.06), transparent 55%),
+    linear-gradient(180deg, var(--bg-top), var(--bg) 420px) fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 { font-family: var(--font-disp); letter-spacing: -0.015em; }
+
+@media (prefers-reduced-motion: no-preference) {
+  main { animation: rise-in .45s cubic-bezier(.22,1,.36,1) both; }
+  @keyframes rise-in { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform:none; } }
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2C474F; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #3a5a64; }
+::selection { background: var(--eco); color: #0B1518; }
+
+*:focus-visible {
+  outline: 1px solid var(--eco);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--ring);
+  transition: box-shadow .15s ease;
+}
+
+/* superfícies: cards com gradiente, raio e elevação do business case */
+.card-surface {
+  background: linear-gradient(180deg, rgba(19,38,44,.92), rgba(16,34,40,.92));
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  box-shadow: var(--shadow-soft);
+  transition: transform .22s cubic-bezier(.22,1,.36,1), box-shadow .22s, border-color .22s;
+}
+.card-surface:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lift);
+  border-color: var(--line-strong);
+}
+
+button {
+  transition: transform .16s cubic-bezier(.22,1,.36,1), box-shadow .16s,
+    background-color .16s, color .16s, border-color .16s, opacity .16s;
+}
+button:not(:disabled):hover { transform: translateY(-1px); }
+button:not(:disabled):active { transform: translateY(0) scale(.985); }
+
+input, textarea, select { transition: border-color .18s, box-shadow .18s, background-color .18s; }
+input:focus, textarea:focus, select:focus { box-shadow: 0 0 0 4px var(--ring); }
+
+/* topbar / faixa da marca: vidro escuro + sheen */
+.brand-band {
+  position: relative; overflow: hidden;
+  background: rgba(11,21,24,.75) !important;
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--line);
+}
+.brand-band::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 42%, rgba(55,201,124,.14) 50%, transparent 58%);
+  background-size: 240% 100%;
+  animation: band-sheen 9s ease-in-out infinite;
+}
+@keyframes band-sheen { 0%,55% { background-position:120% 0; } 85%,100% { background-position:-120% 0; } }
+
+.version-chip {
+  animation: chip-pulse 4.5s ease-out infinite;
+  border-radius: 999px;
+}
+@keyframes chip-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(55,201,124,.35); }
+  35% { box-shadow: 0 0 0 7px rgba(55,201,124,0); }
+  100% { box-shadow: 0 0 0 0 rgba(55,201,124,0); }
+}
+
+.kanban-column {
+  background: linear-gradient(180deg, rgba(19,38,44,.55), rgba(16,34,40,.4));
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(124,176,181,.06);
+}
+
+.dragging { transform: rotate(1.5deg) scale(1.03); box-shadow: var(--shadow-lift); cursor: grabbing; }
+.gate-badge { animation: gate-breathe 2.6s ease-in-out infinite; }
+@keyframes gate-breathe { 0%,100%{opacity:1} 50%{opacity:.55} }
+
+.skeleton {
+  background: linear-gradient(90deg, #13262C 25%, #1a3038 37%, #13262C 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.3s ease infinite;
+}
+@keyframes shimmer { 0%{background-position:100% 0} 100%{background-position:-100% 0} }
+
+.divider-soft { height:1px; background: linear-gradient(90deg, transparent, var(--line-strong), transparent); border:0; }
+.tabular { font-variant-numeric: tabular-nums; }
+.stagger-in { opacity:0; animation: rise-in .4s cubic-bezier(.22,1,.36,1) forwards; }
+
+/* pills (padrão do business case) */
+.pill {
+  font-family: var(--font-mono); font-size: 12px;
+  border: 1px solid var(--line-strong); border-radius: 999px;
+  padding: 6px 13px; background: var(--surface-2);
+}
+.pill b { color: var(--eco); }

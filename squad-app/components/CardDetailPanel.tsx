@@ -77,6 +77,7 @@ export default function CardDetailPanel({
   const [recovering, setRecovering] = useState(false);
   const recoveringRef = useRef(false);
   const [showTransition, setShowTransition] = useState(false);
+  const [showRegress, setShowRegress] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
@@ -491,6 +492,8 @@ export default function CardDetailPanel({
     card.status === "done" ||
     card.status === "cancelled" ||
     card.stage === "done";
+  const stage = card.stage as string;
+  const inAdjustment = !!(card as any).adjustment_mode;
   const isAwaitingReview = card.status === "awaiting_review";
   // Chat disponível sempre que existir uma sessão (mesmo ociosa, dá pra retomar)
   // ou já houver histórico de conversa.
@@ -572,6 +575,21 @@ export default function CardDetailPanel({
 
           {activeTab === "details" && (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            {/* Banner de MODO AJUSTE */}
+            {inAdjustment && (
+              <div className="border border-planning bg-planning/10 rounded-card p-3 text-[12.5px] text-planning">
+                <div className="font-semibold mb-1">↩ modo ajuste pontual</div>
+                <div className="text-ink-300 text-[11.5px] leading-relaxed">
+                  Esta feature voltou de <b className="text-ink-100">{(card as any).regressed_from ?? "etapa posterior"}</b> para um ajuste.
+                  O agente sabe que o trabalho da fase já foi entregue e <b className="text-ink-100">não vai reconstruir</b> —
+                  use o <b className="text-ink-100">chat</b> para descrever exatamente o que ajustar, e o Dev implementa apenas isso.
+                  {(card as any).adjustment_note && (
+                    <div className="mt-1 text-ink-400">contexto: {(card as any).adjustment_note}</div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* O que foi selecionado na criação (auditoria) */}
             <SelectionSummary feature={feature} />
 
@@ -679,6 +697,16 @@ export default function CardDetailPanel({
                       className="bg-qa text-ink-950 px-3 py-1.5 text-sm font-semibold hover:bg-qa/80 disabled:opacity-50"
                     >
                       aprovar e avançar →
+                    </button>
+                  )}
+                  {/* Regredir p/ ajuste pontual: só faz sentido fora do backlog/discovery */}
+                  {!["backlog", "discovery"].includes(stage) && (
+                    <button
+                      onClick={() => setShowRegress(true)}
+                      disabled={actionLoading}
+                      className="border border-planning text-planning px-3 py-1.5 text-sm hover:bg-planning/10 disabled:opacity-50"
+                    >
+                      ↩ regredir para ajuste
                     </button>
                   )}
                   {isAwaitingReview && isMineToReview && (
@@ -850,6 +878,15 @@ export default function CardDetailPanel({
             onClose();
             window.location.reload();
           }}
+        />
+      )}
+
+      {showRegress && (
+        <RegressDialog
+          cardId={cardId}
+          currentStage={stage}
+          onClose={() => setShowRegress(false)}
+          onDone={() => { setShowRegress(false); onClose(); window.location.reload(); }}
         />
       )}
 
@@ -2657,6 +2694,82 @@ function RunAndVerifyPanel({ cardId, feature }: { cardId: string; feature: any }
         // <b className="text-ink-300">rodar aplicação</b>: sobe um preview navegável pra você ver funcionando, sem mexer em código.
         {" "}<b className="text-ink-300">verificar integração</b>: junta esta feature ao restante e roda build+testes pra pegar erros de integração antes de concluir.
       </p>
+    </div>
+  );
+}
+
+// Diálogo de regressão para ajuste pontual: escolhe a etapa anterior e descreve
+// (opcional) o ajuste. O agente volta em modo ajuste, sem reconstruir.
+function RegressDialog({
+  cardId, currentStage, onClose, onDone,
+}: { cardId: string; currentStage: string; onClose: () => void; onDone: () => void }) {
+  const ORDER = ["backlog", "discovery", "planning", "development", "qa", "done"];
+  const LABEL: Record<string, string> = {
+    discovery: "Discovery", planning: "Planejamento técnico",
+    development: "Desenvolvimento", qa: "Qualidade",
+  };
+  const curIdx = ORDER.indexOf(currentStage);
+  // etapas anteriores elegíveis (exclui backlog/discovery/done como destino comum de ajuste)
+  const options = ORDER.slice(1, curIdx).filter((s) => s !== "done");
+  const [target, setTarget] = useState(options[options.length - 1] ?? "development");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function submit() {
+    setBusy(true); setErr("");
+    const res = await fetch(`/api/cards/${cardId}/regress`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_stage: target, note: note.trim() || undefined }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (res.ok) onDone();
+    else { setErr(d.error ?? "falha"); setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-ink-950/90 flex items-center justify-center p-4 z-[60]">
+      <div className="bg-ink-900 border border-planning w-full max-w-md p-6 space-y-4">
+        <div>
+          <div className="text-xs uppercase tracking-widest text-planning">// regredir para ajuste</div>
+          <div className="text-lg font-semibold mt-1">Voltar etapa sem reconstruir</div>
+          <div className="text-sm text-ink-300 mt-2">
+            O card volta para a etapa escolhida em <b className="text-ink-100">modo ajuste</b>: o agente sabe que
+            o trabalho da fase já foi entregue e <b className="text-ink-100">não refaz a construção</b>. Você comanda
+            o ajuste pontual pelo chat.
+          </div>
+        </div>
+        {options.length === 0 ? (
+          <div className="text-sm text-ink-400">Não há etapa anterior elegível para regredir.</div>
+        ) : (
+          <>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">voltar para</label>
+              <select value={target} onChange={(e) => setTarget(e.target.value)}
+                className="w-full bg-ink-950 border border-ink-700 rounded-card px-3 py-2 text-sm text-ink-100">
+                {options.map((s) => <option key={s} value={s}>{LABEL[s] ?? s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">o que ajustar (opcional)</label>
+              <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3}
+                placeholder="ex: o teste de borda do CPF falhou; ajustar a validação no checkout"
+                className="w-full bg-ink-950 border border-ink-700 rounded-card px-3 py-2 text-[12px] text-ink-100" />
+              <div className="text-[10px] text-ink-500 mt-1">você também poderá detalhar pelo chat depois.</div>
+            </div>
+            {err && <div className="text-xs text-qa border border-qa/40 bg-qa/5 rounded-card p-2">{err}</div>}
+          </>
+        )}
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm text-ink-300 hover:text-ink-100">cancelar</button>
+          {options.length > 0 && (
+            <button onClick={submit} disabled={busy}
+              className="bg-planning text-ink-950 px-4 py-1.5 text-sm font-semibold rounded-card hover:opacity-90 disabled:opacity-50">
+              {busy ? "regredindo…" : "regredir para ajuste"}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

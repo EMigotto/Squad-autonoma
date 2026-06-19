@@ -731,6 +731,25 @@ export async function startStage(
   let userMsg: string;
   if (initialMessage) {
     userMsg = initialMessage;
+  } else if ((card as any).adjustment_mode) {
+    // MODO AJUSTE: a feature voltou de uma etapa posterior. NÃO refazer build.
+    const fromStage = (card as any).regressed_from ?? "etapa posterior";
+    userMsg =
+      `=== IDIOMA OBRIGATÓRIO: PORTUGUÊS DO BRASIL ===\n\n` +
+      `=== MODO AJUSTE PONTUAL (NÃO REFAÇA A CONSTRUÇÃO) ===\n` +
+      `Esta feature ("${feature.title}") já teve a etapa de ${stage} CONCLUÍDA e avançou até ${fromStage}. ` +
+      `Ela retornou para ${stage} apenas para um AJUSTE PONTUAL identificado em ${fromStage}.\n\n` +
+      `REGRAS:\n` +
+      `1. O trabalho previsto desta etapa JÁ ESTÁ FEITO e committado na branch de trabalho. ` +
+      `NÃO recomece, NÃO reescreva do zero, NÃO reabra o escopo completo.\n` +
+      `2. Leia o estado atual do código na branch para se situar.\n` +
+      `3. AGUARDE a instrução específica do que ajustar — ela virá nas próximas mensagens do chat. ` +
+      `Implemente APENAS o que for pedido, com a menor mudança possível, sem efeitos colaterais.\n` +
+      `4. Ao terminar o ajuste, faça commit incremental descritivo e relate o que mudou.\n` +
+      (((card as any).adjustment_note)
+        ? `\nContexto inicial do ajuste (do revisor humano):\n${(card as any).adjustment_note}\n`
+        : `\nSe ainda não recebeu o detalhe do ajuste, responda confirmando que está pronto e aguardando a instrução específica.\n`) +
+      `===\n`;
   } else {
     const base = defaultKickoff(
       { ...card, stage },
@@ -1063,7 +1082,7 @@ async function resolveAgentSkills(
 
 export async function redeployAllAgents(
   projectId: string,
-  opts: { refreshBuiltins?: boolean } = {}
+  opts: { refreshBuiltins?: boolean; onlyRole?: string } = {}
 ): Promise<{ results: Array<{ role: string; action: string }> }> {
   const refreshBuiltins = opts.refreshBuiltins !== false; // default true
   const sb = createServiceClient();
@@ -1124,6 +1143,7 @@ export async function redeployAllAgents(
     .eq("enabled", true);
 
   for (const def of defs ?? []) {
+    if (opts.onlyRole && def.role !== opts.onlyRole) continue;
     try {
       const { skills, promptBlock } = await resolveAgentSkills(projectId, def.role);
       const spec: any = buildClaudeSpec({
@@ -1919,6 +1939,9 @@ export async function advanceCard(
       stage: nextStage,
       status: "queued",
       claude_session_id: null,
+      adjustment_mode: false,
+      adjustment_note: null,
+      regressed_from: null,
     })
     .eq("id", cardId);
 
@@ -2109,13 +2132,16 @@ export async function moveCardToStage(
     })
     .eq("id", card.feature_id);
 
-  // Move o card
+  // Move o card (avanço normal limpa o modo ajuste, se estava ligado)
   await sb
     .from("cards")
     .update({
       stage: targetStage,
       status: dispatch ? "queued" : "awaiting_review",
       claude_session_id: null,
+      adjustment_mode: false,
+      adjustment_note: null,
+      regressed_from: null,
     })
     .eq("id", cardId);
 
@@ -2126,6 +2152,52 @@ export async function moveCardToStage(
       await startStage(cardId, undefined, undefined, modelOverride);
     }
   }
+}
+
+// ============================================================
+// regressCardToStage: volta o card para uma etapa ANTERIOR em "modo ajuste".
+// O agente sabe que o trabalho da fase já foi entregue e NÃO refaz a construção;
+// fica disponível no chat para aplicar APENAS o ajuste pontual solicitado.
+// ============================================================
+export async function regressCardToStage(
+  cardId: string,
+  targetStage: StageCode,
+  note?: string
+): Promise<void> {
+  const sb = createServiceClient();
+  const { data: card } = await sb.from("cards").select("*").eq("id", cardId).single();
+  if (!card) throw new Error("card not found");
+  if (!ALL_STAGES.includes(targetStage)) throw new Error(`stage inválida: ${targetStage}`);
+
+  const fromIdx = ALL_STAGES.indexOf(card.stage as StageCode);
+  const toIdx = ALL_STAGES.indexOf(targetStage);
+  if (toIdx >= fromIdx) {
+    throw new Error("regressão exige uma etapa anterior à atual");
+  }
+
+  // Encerra gates abertos e runs em andamento
+  await sb.from("human_gates").update({
+    decision: "rejected",
+    decision_reason: note ? `regressão p/ ajuste: ${note}` : `regressão p/ ajuste para ${targetStage}`,
+    decided_at: new Date().toISOString(),
+  }).eq("card_id", cardId).is("decision", null);
+  await sb.from("card_stage_runs").update({ status: "failed", ended_at: new Date().toISOString() })
+    .eq("card_id", cardId).eq("status", "running");
+
+  await sb.from("features").update({ current_stage: targetStage }).eq("id", card.feature_id);
+
+  // Marca o card em MODO AJUSTE na etapa anterior
+  await sb.from("cards").update({
+    stage: targetStage,
+    status: "queued",
+    claude_session_id: null,
+    adjustment_mode: true,
+    adjustment_note: note ?? null,
+    regressed_from: card.stage,
+  }).eq("id", cardId);
+
+  // Dispara a sessão da etapa em modo ajuste (kickoff específico, sem rebuild)
+  await startStage(cardId);
 }
 
 // ============================================================
