@@ -49,6 +49,12 @@ export default function CreateFeatureDialog({
   const [error, setError] = useState<string>("");
   const [wstep, setWstep] = useState(1);
   const [prdContent, setPrdContent] = useState<string>("");
+  const [functionalityType, setFunctionalityType] = useState("fullstack");
+  const [frontendPath, setFrontendPath] = useState("");
+  const [backendPath, setBackendPath] = useState("");
+  const [backendSeparateRepo, setBackendSeparateRepo] = useState(false);
+  const [backendRepoId, setBackendRepoId] = useState("");
+  const [backendBranch, setBackendBranch] = useState("");
   const [prdName, setPrdName] = useState<string>("");
   const [stack, setStack] = useState<string>("");
   const [success, setSuccess] = useState(false);
@@ -191,6 +197,11 @@ export default function CreateFeatureDialog({
           attachment_paths: attachmentPaths,
           attachment_filenames: files.map((f) => f.file.name),
           prd_content: prdContent || undefined,
+          functionality_type: functionalityType,
+          frontend_path: frontendPath || undefined,
+          backend_path: backendPath || undefined,
+          backend_repository_id: backendSeparateRepo ? (backendRepoId || undefined) : undefined,
+          backend_branch: backendSeparateRepo ? (backendBranch || undefined) : undefined,
         }),
       });
       if (!res.ok) {
@@ -324,6 +335,84 @@ export default function CreateFeatureDialog({
             </div>
 
             <div className={wstep === 2 ? "space-y-4" : "hidden"}>
+            {/* Tipo de funcionalidade */}
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
+                tipo de funcionalidade
+              </label>
+              <select
+                value={functionalityType}
+                onChange={(e) => setFunctionalityType(e.target.value)}
+                className="w-full bg-ink-900 border border-ink-700 px-2 py-1.5 text-sm focus:border-discovery focus:outline-none"
+              >
+                <option value="frontend">Frontend</option>
+                <option value="fullstack">Front &amp; Backend</option>
+                <option value="backend">Backend</option>
+                <option value="api">API</option>
+                <option value="batch">Batch / Job</option>
+                <option value="mobile">Mobile</option>
+                <option value="data">Dados / ETL</option>
+                <option value="infra">Infraestrutura</option>
+                <option value="other">Outro</option>
+              </select>
+              <p className="text-[10px] text-ink-500 mt-1">
+                define como o squad organiza a implementação (quais agentes de Dev atuam e onde).
+              </p>
+            </div>
+
+            {/* Repo separado de backend (só fullstack) */}
+            {functionalityType === "fullstack" && (
+              <div className="border border-development/40 bg-development/5 rounded-card p-3 space-y-3">
+                <div className="text-[11px] text-development uppercase tracking-widest">
+                  front &amp; backend — diretórios/repos
+                </div>
+                <p className="text-[11px] text-ink-400">
+                  O agente de <b className="text-ink-200">frontend</b> respeita o diretório do front; o de
+                  <b className="text-ink-200"> backend</b> recebe o diretório/repo do back. Eles coordenam o
+                  contrato de API entre si. Se o backend fica em outro repositório, informe abaixo.
+                </p>
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">diretório do frontend (opcional)</label>
+                    <input value={frontendPath} onChange={(e) => setFrontendPath(e.target.value)}
+                      placeholder="ex: apps/web ou / (raiz)"
+                      className="w-full bg-ink-950 border border-ink-700 px-2 py-1.5 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">diretório do backend (opcional)</label>
+                    <input value={backendPath} onChange={(e) => setBackendPath(e.target.value)}
+                      placeholder="ex: apps/api ou services/backend"
+                      className="w-full bg-ink-950 border border-ink-700 px-2 py-1.5 text-sm" />
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 text-[12px] text-ink-200">
+                  <input type="checkbox" checked={backendSeparateRepo}
+                    onChange={(e) => setBackendSeparateRepo(e.target.checked)} />
+                  o backend fica em um repositório diferente
+                </label>
+                {backendSeparateRepo && (
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">repo do backend</label>
+                      <select value={backendRepoId} onChange={(e) => setBackendRepoId(e.target.value)}
+                        className="w-full bg-ink-950 border border-ink-700 px-2 py-1.5 text-sm">
+                        <option value="">selecione…</option>
+                        {repos.map((r) => (
+                          <option key={r.id} value={r.id}>{r.label ?? r.github_repo} ({r.github_repo})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">branch do backend (opcional)</label>
+                      <input value={backendBranch} onChange={(e) => setBackendBranch(e.target.value)}
+                        placeholder="ex: feature/x-backend"
+                        className="w-full bg-ink-950 border border-ink-700 px-2 py-1.5 text-sm" />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="block text-[10px] uppercase tracking-widest text-ink-400 mb-1">
                 aplicação

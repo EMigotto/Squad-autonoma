@@ -113,6 +113,11 @@ export async function POST(req: Request) {
         working_branch: body.working_branch?.trim() || undefined,
         source_branch: body.source_branch?.trim() || undefined,
         created_by: user.id,
+        functionality_type: body.functionality_type ?? undefined,
+        frontend_path: body.frontend_path ?? undefined,
+        backend_path: body.backend_path ?? undefined,
+        backend_repository_id: body.backend_repository_id ?? undefined,
+        backend_branch: body.backend_branch ?? undefined,
       });
 
       // 2. Persiste feature_attachments rows (antes de disparar agente)

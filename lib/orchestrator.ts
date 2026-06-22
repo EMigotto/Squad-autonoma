@@ -764,6 +764,37 @@ export async function startStage(
   const projectBlock = await getProjectContextBlock(feature.project_id, feature.repository_id, feature.environment_id, feature.slug, feature.working_branch, feature.source_branch);
   if (projectBlock) userMsg = `${projectBlock}\n${userMsg}`;
 
+  // Bloco de FUNCIONALIDADE: tipo do card + coordenação front/back (fullstack)
+  const ftype = (feature as any).functionality_type as string | null;
+  if (ftype) {
+    let fblock = `\n=== TIPO DE FUNCIONALIDADE: ${ftype.toUpperCase()} ===\n`;
+    if (ftype === "fullstack") {
+      const fePath = (feature as any).selection_meta?.frontend_path || (feature as any).frontend_path || "(raiz do repo)";
+      const bePath = (feature as any).backend_path || (feature as any).selection_meta?.backend_path || "(raiz do repo)";
+      const beRepo = (feature as any).backend_github_repo || (feature as any).selection_meta?.backend_github_repo;
+      const beBranch = (feature as any).backend_branch || (feature as any).selection_meta?.backend_branch;
+      fblock +=
+        `Esta feature tem FRONTEND e BACKEND. Divisão de trabalho entre os agentes de Dev:\n` +
+        `- AGENTE DE FRONTEND: trabalha em "${fePath}" no repo ${feature.github_repo}.\n` +
+        `- AGENTE DE BACKEND: trabalha em "${bePath}"` +
+        (beRepo ? ` no repo SEPARADO ${beRepo}${beBranch ? ` (branch ${beBranch})` : ""}.\n` : ` no mesmo repo ${feature.github_repo}.\n`) +
+        `COORDENAÇÃO OBRIGATÓRIA (a aplicação só funciona se as pontas casarem):\n` +
+        `1. Definam JUNTOS o contrato de API primeiro (endpoints, payloads, status, erros) e registrem em ` +
+        `docs/features/${feature.slug}/api-contract.md ANTES de implementar.\n` +
+        `2. O frontend consome exatamente esse contrato; o backend implementa exatamente esse contrato.\n` +
+        `3. Se um lado precisar mudar o contrato, atualize o doc e avise o outro lado na conversa/PR.\n` +
+        `4. Garantam CORS/baseURL coerentes entre front e back.\n`;
+    } else if (ftype === "frontend") {
+      fblock += `Somente FRONTEND. Não implemente backend; consuma APIs existentes conforme o PRD.\n`;
+    } else if (ftype === "backend" || ftype === "api") {
+      fblock += `Somente ${ftype.toUpperCase()}. Exponha endpoints/contratos claros e documente em docs/features/${feature.slug}/api-contract.md.\n`;
+    } else if (ftype === "batch") {
+      fblock += `Funcionalidade BATCH/JOB. Cuide de idempotência, agendamento, logs e reprocessamento.\n`;
+    }
+    fblock += `===\n`;
+    userMsg = `${userMsg}\n${fblock}`;
+  }
+
   const session = await beta.sessions.create({
     agent: deployed.claude_agent_id,
     environment_id: feature.claude_environment_id,
@@ -2426,11 +2457,24 @@ export async function createFeature(input: {
   working_branch?: string;
   source_branch?: string;
   created_by?: string;
+  functionality_type?: string;
+  frontend_path?: string;
+  backend_path?: string;
+  backend_repository_id?: string;
+  backend_branch?: string;
 }): Promise<{ feature_id: string; card_id: string }> {
   const sb = createServiceClient();
   const normalizedSlug = normalizeSlug(input.slug);
 
   // Registra o que foi selecionado, para auditoria/exibição no card
+  // Resolve o repo do backend (se fullstack com repo separado)
+  let backendRepo: string | null = null;
+  if (input.backend_repository_id) {
+    const { data: br } = await sb
+      .from("project_repositories").select("github_repo").eq("id", input.backend_repository_id).maybeSingle();
+    backendRepo = br?.github_repo ?? null;
+  }
+
   const selection_meta = {
     github_repo: input.github_repo,
     repository_id: input.repository_id ?? null,
@@ -2439,12 +2483,26 @@ export async function createFeature(input: {
     source_branch: input.source_branch ?? null,
     is_new_branch: !!(input.working_branch && input.source_branch),
     github_parent_issue: input.github_parent_issue || null,
+    functionality_type: input.functionality_type ?? null,
+    frontend_path: input.frontend_path ?? null,
+    backend_path: input.backend_path ?? null,
+    backend_github_repo: backendRepo,
+    backend_branch: input.backend_branch ?? null,
     created_at: new Date().toISOString(),
   };
 
+  // separa campos que não são colunas diretas de features
+  const { backend_repository_id, ...featureInput } = input;
+
   const { data: feature, error: fErr } = await sb
     .from("features")
-    .insert({ ...input, slug: normalizedSlug, selection_meta })
+    .insert({
+      ...featureInput,
+      slug: normalizedSlug,
+      selection_meta,
+      backend_github_repo: backendRepo,
+      backend_repository_id: input.backend_repository_id ?? null,
+    })
     .select("id")
     .single();
   if (fErr || !feature) throw fErr ?? new Error("failed to create feature");

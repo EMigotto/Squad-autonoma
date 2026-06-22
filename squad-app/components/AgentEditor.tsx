@@ -354,6 +354,7 @@ function AgentSkills({ role }: { role: string }) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent_role: role, skill_catalog_id: skillId, enabled: false }),
     });
+    await redeployThis();
   }
   async function relink(skillId: string) {
     setProjAssoc((prev) => {
@@ -369,6 +370,7 @@ function AgentSkills({ role }: { role: string }) {
         ...(inheritedOn(skillId) ? { clear: true } : { enabled: true }),
       }),
     });
+    await redeployThis();
   }
 
   async function redeployThis() {

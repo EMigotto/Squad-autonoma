@@ -101,6 +101,11 @@ export async function POST(req: Request) {
           working_branch: body.working_branch,
           source_branch: body.source_branch,
           created_by: user.id,
+          functionality_type: body.functionality_type ?? undefined,
+          frontend_path: body.frontend_path ?? undefined,
+          backend_path: body.backend_path ?? undefined,
+          backend_repository_id: body.backend_repository_id ?? undefined,
+          backend_branch: body.backend_branch ?? undefined,
         });
         // semente: grava o PRD na feature — o startStage injeta no kickoff do Discovery
         await svc.from("features").update({ seed_prd: prd }).eq("id", feature_id);

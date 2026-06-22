@@ -2334,6 +2334,8 @@ function SkillsSection() {
   const [projAssoc, setProjAssoc] = useState<any[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [redeployRole, setRedeployRole] = useState<string>("");
+  const [redeployMsg, setRedeployMsg] = useState<string>("");
 
   async function load() {
     const d = await fetch("/api/skills").then((r) => r.json()).catch(() => ({}));
@@ -2344,6 +2346,24 @@ function SkillsSection() {
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
+
+  // Redeploya o agente do papel afetado, anexando as skills (visível no
+  // Claude Managed Agents na seção de Skills do agente).
+  async function redeployRoleNow(role: string) {
+    setRedeployRole(role); setRedeployMsg("");
+    try {
+      const res = await fetch("/api/admin/redeploy-agents", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      const d = await res.json().catch(() => ({}));
+      setRedeployMsg(res.ok ? `${role} redeployado com as skills ✓` : (d.error ?? "falha no redeploy"));
+    } catch (e) {
+      setRedeployMsg(String(e));
+    } finally {
+      setRedeployRole("");
+    }
+  }
 
   function inheritedOn(role: string, skillId: string) {
     return globalAssoc.some((a) => a.agent_role === role && a.skill_catalog_id === skillId && a.enabled);
@@ -2369,6 +2389,8 @@ function SkillsSection() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent_role: role, skill_catalog_id: skillId, enabled }),
     });
+    // redeploya o agente afetado imediatamente, anexando/retirando a skill
+    await redeployRoleNow(role);
   }
   async function clearOverride(role: string, skillId: string) {
     // remover o override = voltar a seguir o global. Implementado como delete do override.
@@ -2377,6 +2399,7 @@ function SkillsSection() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agent_role: role, skill_catalog_id: skillId, clear: true }),
     });
+    await redeployRoleNow(role);
   }
 
   return (
@@ -2397,7 +2420,14 @@ function SkillsSection() {
       </section>
 
       <section className="card-surface rounded-panel p-6">
-        <h2 className="font-disp text-lg text-ink-100 mb-3">Associação skill × agente (efetiva)</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-disp text-lg text-ink-100">Associação skill × agente (efetiva)</h2>
+          {(redeployRole || redeployMsg) && (
+            <span className="text-[11px] font-mono text-qa">
+              {redeployRole ? `redeployando ${redeployRole}…` : redeployMsg}
+            </span>
+          )}
+        </div>
         {loading ? <div className="skeleton h-24 rounded-card" /> : skills.length === 0 ? (
           <div className="text-[13px] text-ink-400">Nenhuma skill no catálogo. Suba skills no Admin.</div>
         ) : agents.length === 0 ? (
@@ -2443,7 +2473,8 @@ function SkillsSection() {
               </tbody>
             </table>
             <p className="text-[11px] text-ink-500 mt-4">
-              // marcar/desmarcar cria um override deste time. O "✕" remove o override e volta a seguir o global.
+              // marcar/desmarcar cria um override deste time E redeploya o agente afetado na hora,
+              anexando a skill (visível na seção de Skills do agente no Claude Managed Agents). O "✕" remove o override e volta a seguir o global.
             </p>
           </div>
         )}

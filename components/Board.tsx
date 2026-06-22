@@ -58,6 +58,7 @@ export default function Board({
   const [activeCard, setActiveCard] = useState<any | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showBug, setShowBug] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [openCardId, setOpenCardId] = useState<string | null>(null);
   const [transitionCardId, setTransitionCardId] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
@@ -92,7 +93,7 @@ export default function Board({
       let query = sb
         .from("cards")
         .select(
-          `id, stage, status, claude_session_id, updated_at,
+          `id, stage, status, claude_session_id, updated_at, archived,
            feature:features!inner ( id, slug, title, github_repo, claude_environment_id, project_id ),
            human_gates ( id, summary, decision, assignee_id ),
                metrics:card_metrics ( cycle_time_hours, first_pass, gates_total, gates_rejected, test_coverage_pct, total_cost, is_done )`
@@ -101,10 +102,13 @@ export default function Board({
       if (activeProjectId) {
         query = query.eq("feature.project_id", activeProjectId);
       }
+      if (!showArchived) {
+        query = query.eq("archived", false);
+      }
       const { data } = await query;
       if (data) setCards(data);
     }
-  }, [activeProjectId]);
+  }, [activeProjectId, showArchived]);
 
   // Polling proativo: a cada 15s consulta o status real das sessões e
   // destrava cards presos (sessão ociosa no Claude mas card ainda "running").
@@ -380,6 +384,13 @@ export default function Board({
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowArchived((v) => !v)}
+            className={`text-xs uppercase tracking-widest px-3 py-1.5 ${showArchived ? "text-qa" : "text-ink-400 hover:text-ink-100"}`}
+            title="mostra/oculta cards arquivados"
+          >
+            {showArchived ? "ocultar arquivados" : "arquivados"}
+          </button>
           <Link
             href="/admin"
             className="text-xs uppercase tracking-widest text-ink-300 hover:text-ink-100 px-3 py-1.5"

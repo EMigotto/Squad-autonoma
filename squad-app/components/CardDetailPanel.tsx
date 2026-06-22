@@ -166,6 +166,7 @@ export default function CardDetailPanel({
          feature:features (id, slug, title, description, github_repo,
                           current_stage, claude_environment_id, github_parent_issue,
                           working_branch, source_branch, environment_id, repository_id,
+                          functionality_type, backend_github_repo, backend_path,
                           selection_meta),
          human_gates (id, summary, decision, decision_reason, assignee_id, created_at)`
       )
@@ -784,6 +785,35 @@ export default function CardDetailPanel({
                 <InfrastructureSection cardId={cardId} />
                 <PromoteSection cardId={cardId} />
               </>
+            )}
+
+            {isTerminal && (
+              <Section title={(card as any).archived ? "card arquivado" : "arquivar card"}>
+                <div className="text-xs text-ink-400 mb-3">
+                  {(card as any).archived
+                    ? "Este card está arquivado e não aparece no board (a menos que você ative “arquivados”). Você pode desarquivá-lo."
+                    : "Arquivar tira o card da coluna Concluído sem apagá-lo — os dados e o ROI continuam contando. Use para limpar a visão."}
+                </div>
+                <button
+                  onClick={async () => {
+                    setActionLoading(true);
+                    await fetch(`/api/cards/${cardId}/archive`, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ archived: !(card as any).archived }),
+                    });
+                    onClose();
+                    window.location.reload();
+                  }}
+                  disabled={actionLoading}
+                  className={`px-3 py-1.5 text-sm font-semibold disabled:opacity-50 ${
+                    (card as any).archived
+                      ? "border border-qa text-qa hover:bg-qa/10"
+                      : "bg-ink-100 text-ink-950 hover:bg-ink-300"
+                  }`}
+                >
+                  {(card as any).archived ? "desarquivar" : "📦 arquivar card"}
+                </button>
+              </Section>
             )}
 
             {isTerminal && (
@@ -2601,6 +2631,7 @@ function SelectionSummary({ feature }: { feature: any }) {
   const parent = feature.github_parent_issue ?? meta.github_parent_issue ?? null;
 
   const rows: Array<[string, React.ReactNode]> = [
+    ["tipo", <span className="text-planning">{feature.functionality_type ?? meta.functionality_type ?? "—"}</span>],
     ["repositório", <span className="font-mono text-development">{repo}</span>],
     ["branch de trabalho", working
       ? <span className="font-mono text-ink-100">{working} {isNewBranch && <span className="text-qa">(nova)</span>}</span>
@@ -2608,6 +2639,10 @@ function SelectionSummary({ feature }: { feature: any }) {
     ["branch de origem", source ? <span className="font-mono text-ink-200">{source}</span> : <span className="text-ink-500">—</span>],
     ["parent issue", parent ? <span className="font-mono text-ink-200">#{parent}</span> : <span className="text-ink-500">nenhuma</span>],
   ];
+  const beRepo = feature.backend_github_repo ?? meta.backend_github_repo;
+  if (beRepo || meta.backend_path) {
+    rows.push(["backend", <span className="font-mono text-development">{beRepo ?? repo}{meta.backend_path ? ` · ${meta.backend_path}` : ""}</span>]);
+  }
 
   return (
     <div className="border border-ink-700 rounded-card bg-ink-900/50 p-4">
